@@ -32,8 +32,13 @@ import Cardano.DbSync.Cache (
   queryPoolKeyOrInsert,
  )
 import Cardano.DbSync.Cache.Types (CacheAction (..), CacheStatus (..))
+import Cardano.DbSync.Era.Conway.Insert.GovAction (
+  insertCommitteeHash,
+  insertCredDrepHash,
+  insertDrep,
+  insertVotingAnchor,
+ )
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
-import Cardano.DbSync.Era.Universal.Insert.GovAction (insertCommitteeHash, insertCredDrepHash, insertDrep, insertVotingAnchor)
 import Cardano.DbSync.Era.Universal.Insert.Pool (IsPoolMember, insertPoolCert)
 import Cardano.DbSync.Error
 import Cardano.DbSync.Types
@@ -57,6 +62,9 @@ import qualified Data.Map.Strict as Map
 import Database.Persist.Sql (SqlBackend)
 import Ouroboros.Consensus.Cardano.Block (StandardCrypto)
 
+--------------------------------------------------------------------------------------------
+-- Insert Certificates
+--------------------------------------------------------------------------------------------
 insertCertificate ::
   (MonadBaseControl IO m, MonadIO m) =>
   SyncEnv ->

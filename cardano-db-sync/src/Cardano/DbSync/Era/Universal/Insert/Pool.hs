@@ -69,7 +69,6 @@ insertPoolRegister trce cache isMember mdeposits network (EpochNo epoch) blkId t
   isRegistration <- isPoolRegistration poolHashId
   let epochActivationDelay = if isRegistration then 2 else 3
       deposit = if isRegistration then Generic.coinToDbLovelace . Generic.poolDeposit <$> mdeposits else Nothing
-
   saId <- lift $ queryOrInsertRewardAccount trce cache UpdateCache (adjustNetworkTag $ PoolP.ppRewardAccount params)
   poolUpdateId <-
     lift
