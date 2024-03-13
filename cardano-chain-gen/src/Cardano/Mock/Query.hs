@@ -11,10 +11,13 @@ module Cardano.Mock.Query (
   queryGovActionCounts,
   queryConstitutionAnchor,
   queryRewardRests,
+  queryMultiAssetMetadataPolicy,
 ) where
 
 import qualified Cardano.Db as Db
-import Cardano.Prelude hiding (from, on)
+import Cardano.Prelude hiding (from)
+import qualified Data.ByteString.Base16 as Base16
+import Data.ByteString.Short (ShortByteString, toShort)
 import Database.Esqueleto.Experimental
 import Prelude ()
 

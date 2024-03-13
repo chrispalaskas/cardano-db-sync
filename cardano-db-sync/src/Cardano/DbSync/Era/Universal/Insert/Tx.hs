@@ -21,14 +21,14 @@ import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..))
 import Cardano.DbSync.Cache.Types (CacheStatus (..))
 
 import Cardano.DbSync.Config.Types (MetadataConfig (..), MultiAssetConfig (..), PlutusConfig (..), isPlutusEnabled)
-import Cardano.DbSync.Era.Conway.Insert.GovAction (
+import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
+import Cardano.DbSync.Era.Shelley.Generic.Metadata (TxMetadataValue (..), metadataValueToJsonNoSchema)
+import Cardano.DbSync.Era.Universal.Insert.Certificate (insertCertificate)
+import Cardano.DbSync.Era.Universal.Insert.GovAction (
   insertGovActionProposal,
   insertParamProposal,
   insertVotingProcedures,
  )
-import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
-import Cardano.DbSync.Era.Shelley.Generic.Metadata (TxMetadataValue (..), metadataValueToJsonNoSchema)
-import Cardano.DbSync.Era.Universal.Insert.Certificate (insertCertificate)
 import Cardano.DbSync.Era.Universal.Insert.Grouped
 import Cardano.DbSync.Era.Universal.Insert.Other (
   insertDatum,
@@ -244,8 +244,11 @@ insertTxOut tracer cache iopts (txId, txHash) (Generic.TxOut index addr value ma
       let !eutxo = ExtendedTxOut txHash txOut
       case ioMultiAssets iopts of
         MultiAssetDisable -> pure (eutxo, mempty)
-        _ -> do
+        MultiAssetEnable -> do
           !maTxOuts <- insertMaTxOuts tracer cache Nothing maMap
+          pure (eutxo, maTxOuts)
+        MultiAssetPolicies whitelist -> do
+          !maTxOuts <- insertMaTxOuts tracer cache (Just whitelist) maMap
           pure (eutxo, maTxOuts)
 
     hasScript :: Bool
@@ -314,7 +317,7 @@ insertMaTxMint ::
   DB.TxId ->
   MultiAsset StandardCrypto ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) [DB.MaTxMint]
-insertMaTxMint _tracer cache mWhitelist txId (MultiAsset mintMap) =
+insertMaTxMint tracer cache mWhitelist txId (MultiAsset mintMap) =
   concatMapM (lift . prepareOuter) $ Map.toList mintMap
   where
     prepareOuter ::
@@ -330,7 +333,7 @@ insertMaTxMint _tracer cache mWhitelist txId (MultiAsset mintMap) =
       (AssetName, Integer) ->
       ReaderT SqlBackend m (Maybe DB.MaTxMint)
     prepareInner policy (aname, amount) = do
-      maybeMaId <- insertMultiAsset cache mWhitelist policy aname
+      maybeMaId <- insertMultiAsset tracer cache mWhitelist policy aname
       pure $ case maybeMaId of
         Just maId ->
           Just $
@@ -348,7 +351,7 @@ insertMaTxOuts ::
   Maybe (NonEmpty ShortByteString) ->
   Map (PolicyID StandardCrypto) (Map AssetName Integer) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) [MissingMaTxOut]
-insertMaTxOuts _tracer cache mWhitelist maMap =
+insertMaTxOuts tracer cache mWhitelist maMap =
   concatMapM (lift . prepareOuter) $ Map.toList maMap
   where
     prepareOuter ::
@@ -364,7 +367,7 @@ insertMaTxOuts _tracer cache mWhitelist maMap =
       (AssetName, Integer) ->
       ReaderT SqlBackend m (Maybe MissingMaTxOut)
     prepareInner policy (aname, amount) = do
-      mMaId <- insertMultiAsset cache mWhitelist policy aname
+      mMaId <- insertMultiAsset tracer cache mWhitelist policy aname
       pure $ case mMaId of
         Just maId ->
           Just $
