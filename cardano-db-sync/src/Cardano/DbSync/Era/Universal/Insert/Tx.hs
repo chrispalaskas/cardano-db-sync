@@ -175,8 +175,8 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
       maTxMint <-
         case ioMultiAssets iopts of
           MultiAssetDisable -> pure mempty
-          MultiAssetEnable -> insertMaTxMint tracer cache Nothing txId $ Generic.txMint tx
-          MultiAssetPolicies whitelist -> insertMaTxMint tracer cache (Just whitelist) txId $ Generic.txMint tx
+          MultiAssetEnable -> insertMaTxMint cache Nothing txId $ Generic.txMint tx
+          MultiAssetPolicies whitelist -> insertMaTxMint cache (Just whitelist) txId $ Generic.txMint tx
 
       when (isPlutusEnabled $ ioPlutus iopts) $
         mapM_ (lift . insertScript tracer txId) $
@@ -245,10 +245,10 @@ insertTxOut tracer cache iopts (txId, txHash) (Generic.TxOut index addr value ma
       case ioMultiAssets iopts of
         MultiAssetDisable -> pure (eutxo, mempty)
         MultiAssetEnable -> do
-          !maTxOuts <- insertMaTxOuts tracer cache Nothing maMap
+          !maTxOuts <- insertMaTxOuts cache Nothing maMap
           pure (eutxo, maTxOuts)
         MultiAssetPolicies whitelist -> do
-          !maTxOuts <- insertMaTxOuts tracer cache (Just whitelist) maMap
+          !maTxOuts <- insertMaTxOuts cache (Just whitelist) maMap
           pure (eutxo, maTxOuts)
 
     hasScript :: Bool
@@ -317,7 +317,7 @@ insertMaTxMint ::
   DB.TxId ->
   MultiAsset StandardCrypto ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) [DB.MaTxMint]
-insertMaTxMint tracer cache mWhitelist txId (MultiAsset mintMap) =
+insertMaTxMint cache mWhitelist txId (MultiAsset mintMap) =
   concatMapM (lift . prepareOuter) $ Map.toList mintMap
   where
     prepareOuter ::
@@ -333,7 +333,7 @@ insertMaTxMint tracer cache mWhitelist txId (MultiAsset mintMap) =
       (AssetName, Integer) ->
       ReaderT SqlBackend m (Maybe DB.MaTxMint)
     prepareInner policy (aname, amount) = do
-      maybeMaId <- insertMultiAsset tracer cache mWhitelist policy aname
+      maybeMaId <- insertMultiAsset cache mWhitelist policy aname
       pure $ case maybeMaId of
         Just maId ->
           Just $
@@ -351,7 +351,7 @@ insertMaTxOuts ::
   Maybe (NonEmpty ShortByteString) ->
   Map (PolicyID StandardCrypto) (Map AssetName Integer) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) [MissingMaTxOut]
-insertMaTxOuts tracer cache mWhitelist maMap =
+insertMaTxOuts cache mWhitelist maMap =
   concatMapM (lift . prepareOuter) $ Map.toList maMap
   where
     prepareOuter ::
@@ -367,7 +367,7 @@ insertMaTxOuts tracer cache mWhitelist maMap =
       (AssetName, Integer) ->
       ReaderT SqlBackend m (Maybe MissingMaTxOut)
     prepareInner policy (aname, amount) = do
-      mMaId <- insertMultiAsset tracer cache mWhitelist policy aname
+      mMaId <- insertMultiAsset cache mWhitelist policy aname
       pure $ case mMaId of
         Just maId ->
           Just $
