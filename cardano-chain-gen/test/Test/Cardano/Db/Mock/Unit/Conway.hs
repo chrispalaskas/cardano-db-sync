@@ -17,6 +17,7 @@ import qualified Test.Cardano.Db.Mock.Unit.Conway.Rollback as Rollback
 import qualified Test.Cardano.Db.Mock.Unit.Conway.Simple as Simple
 import qualified Test.Cardano.Db.Mock.Unit.Conway.Stake as Stake
 import qualified Test.Cardano.Db.Mock.Unit.Conway.Tx as Tx
+import qualified Test.Cardano.Db.Mock.Unit.Conway.Whitelist as Whitelist
 import Test.Tasty (TestTree (), testGroup)
 import Test.Tasty.HUnit (Assertion (), testCase)
 import Prelude (String ())
@@ -101,8 +102,6 @@ unitTests iom knownMigrations =
         , test "consume utxo same block" Tx.consumeSameBlock
         , test "tx with metadata" Tx.addTxMetadata
         , test "tx with metadata disabled" Tx.addTxMetadataDisabled
-        , test "tx with metadata whitelist" Tx.addTxMetadataWhitelist
-        , test "tx with metadata whitelist multiple" Tx.addTxMetadataWhitelistMultiple
         ]
     , testGroup
         "stake addresses"
@@ -163,7 +162,13 @@ unitTests iom knownMigrations =
         , test "mint many multi assets" Plutus.mintMultiAssets
         , test "swap many multi assets" Plutus.swapMultiAssets
         , test "swap with multi assets disabled" Plutus.swapMultiAssetsDisabled
-        , test "add multi assets with whitelist" Plutus.addTxMultiAssetsWhitelist
+        ]
+    , testGroup
+        "Whitelist"
+        [ test "add tx with whitelist" Whitelist.addTxMultiAssetsWhitelist
+        , test "tx with metadata whitelist" Whitelist.addTxMetadataWhitelist
+        , test "tx with metadata whitelist multiple" Whitelist.addTxMetadataWhitelistMultiple
+        , test "add simple tx, whitelist tx address" Whitelist.addSimpleTxStakeAddrsWhitelist
         ]
     , testGroup
         "Pools and smash"

@@ -51,6 +51,8 @@ import Control.Concurrent.Class.MonadSTM.Strict (
   writeTVar,
  )
 import Control.Monad.Trans.Control (MonadBaseControl)
+import qualified Data.ByteString.Base16 as Base16
+import Data.ByteString.Short (toShort)
 import Data.Either.Combinators
 import qualified Data.Map.Strict as Map
 import Database.Persist.Postgresql (SqlBackend)
@@ -92,7 +94,13 @@ queryOrInsertRewardAccount ::
   CacheAction ->
   Ledger.RewardAccount StandardCrypto ->
   ReaderT SqlBackend m (Maybe DB.StakeAddressId)
-queryOrInsertRewardAccount syncEnv cache cacheUA rewardAddr = do
+queryOrInsertRewardAccount syncEnv cache cacheNew rewardAddr = do
+  liftIO $
+    logInfo (getTrace syncEnv) $
+      mconcat
+        [ "queryOrInsertRewardAccount: "
+        , show $ toShort . Base16.encode $ laBs
+        ]
   -- check if the stake address is in the whitelist
   if shelleyInsertWhitelistCheck (ioShelley iopts) laBs
     then do
@@ -102,9 +110,10 @@ queryOrInsertRewardAccount syncEnv cache cacheUA rewardAddr = do
         Right addrId -> pure $ Just addrId
     else pure Nothing
   where
+    -- this is the stake address of the reward account used when whitelisting
+    !laBs = Ledger.serialiseRewardAcnt (Ledger.RewardAcnt nw cred)
     nw = Ledger.getRwdNetwork rewardAddr
     cred = Ledger.getRwdCred rewardAddr
-    !laBs = Ledger.serialiseRewardAcnt (Ledger.RewardAcnt nw cred)
     iopts = soptInsertOptions $ envOptions syncEnv
 
 queryOrInsertStakeAddress ::
@@ -325,7 +334,7 @@ queryPoolKeyOrInsert txt syncEnv cache cacheUA logsWarning hsh = do
       insertPoolKeyWithCache cache cacheUA hsh
 
 queryMAWithCache ::
-  (MonadIO m) =>
+  MonadIO m =>
   Cache ->
   PolicyID StandardCrypto ->
   AssetName ->
@@ -357,7 +366,7 @@ queryMAWithCache cache policyId asset =
           pure maId
 
 queryPrevBlockWithCache ::
-  (MonadIO m) =>
+  MonadIO m =>
   Text ->
   CacheStatus ->
   ByteString ->
@@ -378,7 +387,7 @@ queryPrevBlockWithCache msg cache hsh =
         Nothing -> queryFromDb ci
   where
     queryFromDb ::
-      (MonadIO m) =>
+      MonadIO m =>
       CacheInternal ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) DB.BlockId
     queryFromDb ci = do

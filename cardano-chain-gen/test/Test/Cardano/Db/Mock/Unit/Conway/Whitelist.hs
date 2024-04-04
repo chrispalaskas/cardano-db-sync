@@ -1,0 +1,266 @@
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
+
+module Test.Cardano.Db.Mock.Unit.Conway.Whitelist (
+  addTxMultiAssetsWhitelist,
+  addTxMetadataWhitelist,
+  addTxMetadataWhitelistMultiple,
+  addSimpleTxStakeAddrsWhitelist,
+)
+where
+
+import Cardano.DbSync.Config (SyncNodeConfig (..))
+import Cardano.DbSync.Config.Types (MetadataConfig (..), MultiAssetConfig (..), ShelleyInsertConfig (..), SyncInsertOptions (..))
+import Cardano.Ledger.Coin (Coin (..))
+import Cardano.Ledger.Mary.Value (MaryValue (..), MultiAsset (..), PolicyID (..))
+import Cardano.Ledger.Shelley.TxAuxData (Metadatum (..))
+import Cardano.Mock.ChainSync.Server (IOManager ())
+import qualified Cardano.Mock.Forging.Tx.Alonzo.ScriptsExamples as Examples
+import qualified Cardano.Mock.Forging.Tx.Conway as Conway
+import Cardano.Mock.Forging.Types
+import Cardano.Mock.Query (queryMultiAssetCount, queryMultiAssetMetadataPolicy, queryStakeAddressHashRaw, queryTxMetadataCount)
+import Cardano.Prelude hiding (head)
+import Data.ByteString.Short (toShort)
+import Data.List.NonEmpty (fromList)
+import qualified Data.Map as Map
+import Test.Cardano.Db.Mock.Config
+import qualified Test.Cardano.Db.Mock.UnifiedApi as Api
+import qualified Test.Cardano.Db.Mock.UnifiedApi as UnifiedApi
+import Test.Cardano.Db.Mock.Validate
+import Test.Tasty.HUnit (Assertion ())
+import Prelude (head, (!!))
+
+addTxMultiAssetsWhitelist :: IOManager -> [(Text, Text)] -> Assertion
+addTxMultiAssetsWhitelist ioManager metadata = do
+  syncNodeConfig <- mksNodeConfig
+  withCustomConfig args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
+  where
+    action = \interpreter mockServer dbSync -> do
+      startDBSync dbSync
+      -- Forge a block with multiple multi-asset scripts
+      void $ Api.withConwayFindLeaderAndSubmit interpreter mockServer $ \state' -> do
+        let assetsMinted =
+              Map.fromList [(head Examples.assetNames, 10), (Examples.assetNames !! 1, 4)]
+            policy0 = PolicyID $ Examples.alwaysMintScriptHashRandomPolicyVal 1
+            policy1 = PolicyID $ Examples.alwaysMintScriptHashRandomPolicyVal 2
+            mintValue =
+              MultiAsset $
+                Map.fromList [(policy0, assetsMinted), (policy1, assetsMinted)]
+            assets =
+              Map.fromList [(head Examples.assetNames, 5), (Examples.assetNames !! 1, 2)]
+            outValue =
+              MaryValue (Coin 20) $
+                MultiAsset $
+                  Map.fromList [(policy0, assets), (policy1, assets)]
+
+        -- Forge a multi-asset script
+        tx0 <-
+          Conway.mkMultiAssetsScriptTx
+            [UTxOIndex 0]
+            (UTxOIndex 1)
+            [ (UTxOAddress Examples.alwaysSucceedsScriptAddr, outValue)
+            , (UTxOAddress Examples.alwaysMintScriptAddr, outValue)
+            ]
+            []
+            mintValue
+            True
+            100
+            state'
+
+        -- Consume the outputs from tx0
+        let utxos = Conway.mkUTxOConway tx0
+        tx1 <-
+          Conway.mkMultiAssetsScriptTx
+            [UTxOPair (head utxos), UTxOPair (utxos !! 1), UTxOIndex 2]
+            (UTxOIndex 3)
+            [ (UTxOAddress Examples.alwaysSucceedsScriptAddr, outValue)
+            , (UTxOAddress Examples.alwaysMintScriptAddr, outValue)
+            , (UTxOAddressNew 0, outValue)
+            , (UTxOAddressNew 0, outValue)
+            ]
+            []
+            mintValue
+            True
+            200
+            state'
+        pure [tx0, tx1]
+
+      -- Verify script counts
+      assertBlockNoBackoff dbSync 1
+      assertAlonzoCounts dbSync (2, 4, 1, 2, 4, 2, 0, 0)
+      -- create 4 multi-assets but only 2 should be added due to the whitelist
+      assertEqBackoff dbSync queryMultiAssetCount 2 [] "Expected 2 multi-assets"
+      -- do the policy match the whitelist
+      assertEqBackoff dbSync queryMultiAssetMetadataPolicy (Just policyShortBs) [] "Expected correct policy in db"
+
+    args = initCommandLineArgs {claFullMode = False}
+    testLabel = "conwayConfigMultiAssetsWhitelist"
+
+    cfgDir = conwayConfigDir
+
+    policyShortBs = toShort "4509cdddad21412c22c9164e10bc6071340ba235562f1575a35ded4d"
+
+    mksNodeConfig :: IO SyncNodeConfig
+    mksNodeConfig = do
+      initConfigFile <- mkSyncNodeConfig cfgDir args
+      let dncInsertOptions' = dncInsertOptions initConfigFile
+      pure $
+        initConfigFile
+          { dncInsertOptions =
+              dncInsertOptions'
+                { sioMultiAsset =
+                    MultiAssetPolicies $
+                      fromList [policyShortBs]
+                }
+          }
+
+-- 2 blocks each with 4 metadata entries.
+-- The whitelist has one tx metadata key which is in the first block
+-- so only the TX in the first block should have tx metadata kept.
+addTxMetadataWhitelist :: IOManager -> [(Text, Text)] -> Assertion
+addTxMetadataWhitelist ioManager metadata = do
+  syncNodeConfig <- mksNodeConfig
+  withCustomConfigAndDropDB args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
+  where
+    action = \interpreter mockServer dbSync -> do
+      startDBSync dbSync
+      -- Add transactions with metadata
+      void $ do
+        UnifiedApi.withConwayFindLeaderAndSubmitTx interpreter mockServer $ \_ ->
+          let txBody = Conway.mkDummyTxBodyWithFee $ Coin 1_000
+              auxData = Map.fromList [(1, I 1), (2, I 2), (3, I 3), (4, I 4)]
+           in Right (Conway.mkAuxDataTx True txBody auxData)
+      void $ do
+        UnifiedApi.withConwayFindLeaderAndSubmitTx interpreter mockServer $ \_ ->
+          let txBody = Conway.mkDummyTxBodyWithFee $ Coin 2_000
+              auxData = Map.fromList [(5, I 5), (6, I 6), (7, I 7), (8, I 8)]
+           in Right (Conway.mkAuxDataTx True txBody auxData)
+
+      assertBlockNoBackoff dbSync 2
+      -- Should have first block's tx metadata
+      assertEqBackoff dbSync queryTxMetadataCount 4 [] "Expected tx metadata"
+
+    args = initCommandLineArgs {claFullMode = False}
+    testLabel = "conwayConfigMetadataWhitelist"
+
+    cfgDir = conwayConfigDir
+
+    -- match all metadata keys of value 1
+    mksNodeConfig :: IO SyncNodeConfig
+    mksNodeConfig = do
+      initConfigFile <- mkSyncNodeConfig cfgDir args
+      let dncInsertOptions' = dncInsertOptions initConfigFile
+      pure $
+        initConfigFile
+          { dncInsertOptions = dncInsertOptions' {sioMetadata = MetadataKeys $ fromList [1]}
+          }
+
+-- 2 blocks each with 4 metadata entries
+-- The whitelist is set to keys [1,6] each key in in different TX
+-- so all TxMetadata should be kept from both blocks.
+addTxMetadataWhitelistMultiple :: IOManager -> [(Text, Text)] -> Assertion
+addTxMetadataWhitelistMultiple ioManager metadata = do
+  syncNodeConfig <- mksNodeConfig
+  withCustomConfigAndDropDB args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
+  where
+    action = \interpreter mockServer dbSync -> do
+      startDBSync dbSync
+      -- Add transactions with metadata
+      void $ do
+        UnifiedApi.withConwayFindLeaderAndSubmitTx interpreter mockServer $ \_ ->
+          let txBody = Conway.mkDummyTxBodyWithFee $ Coin 1_000
+              auxData = Map.fromList [(1, I 1), (2, I 2), (3, I 3), (4, I 4)]
+           in Right (Conway.mkAuxDataTx True txBody auxData)
+      void $ do
+        UnifiedApi.withConwayFindLeaderAndSubmitTx interpreter mockServer $ \_ ->
+          let txBody = Conway.mkDummyTxBodyWithFee $ Coin 2_000
+              auxData = Map.fromList [(5, I 5), (6, I 6), (7, I 7), (8, I 8)]
+           in Right (Conway.mkAuxDataTx True txBody auxData)
+
+      assertBlockNoBackoff dbSync 2
+      -- Should have both block's tx metadata
+      assertEqBackoff dbSync queryTxMetadataCount 8 [] "Expected tx metadata"
+
+    args = initCommandLineArgs {claFullMode = False}
+    testLabel = "conwayConfigMetadataWhitelist"
+
+    cfgDir = conwayConfigDir
+
+    -- match all metadata keys of value 1
+    mksNodeConfig :: IO SyncNodeConfig
+    mksNodeConfig = do
+      initConfigFile <- mkSyncNodeConfig cfgDir args
+      let dncInsertOptions' = dncInsertOptions initConfigFile
+      pure $
+        initConfigFile
+          { dncInsertOptions = dncInsertOptions' {sioMetadata = MetadataKeys $ fromList [1, 6]}
+          }
+
+addSimpleTxStakeAddrsWhitelist :: IOManager -> [(Text, Text)] -> Assertion
+addSimpleTxStakeAddrsWhitelist ioManager metadata = do
+  syncNodeConfig <- mksNodeConfig
+  withCustomConfigAndLogs args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
+  where
+    action = \interpreter mockServer dbSync -> do
+      -- Forge a block
+      void $
+        UnifiedApi.withConwayFindLeaderAndSubmitTx interpreter mockServer $
+          Conway.mkPaymentTx (UTxOIndex 0) (UTxOIndex 1) 10_000 500
+
+      startDBSync dbSync
+      -- Verify it syncs
+      assertBlockNoBackoff dbSync 1
+      assertTxCount dbSync 12
+
+      assertEqBackoff dbSync queryStakeAddressHashRaw (Just shelleyStakeAddrShortBs) [] "Expected matching stake address"
+
+    testLabel = "conwayAddSimpleTx"
+    args = initCommandLineArgs {claFullMode = False}
+    cfgDir = conwayConfigDir
+
+    shelleyStakeAddrShortBs = toShort "e0921c25093b263793a1baf36166b819543f5822c62f72571111111111"
+    -- match all metadata keys of value 1
+    mksNodeConfig :: IO SyncNodeConfig
+    mksNodeConfig = do
+      initConfigFile <- mkSyncNodeConfig cfgDir args
+      let dncInsertOptions' = dncInsertOptions initConfigFile
+      pure $
+        initConfigFile
+          { dncInsertOptions =
+              dncInsertOptions'
+                { sioShelley =
+                    ShelleyStakeAddrs $
+                      fromList [shelleyStakeAddrShortBs]
+                }
+          }
+
+-- spendCollateralOutput :: IOManager -> [(Text, Text)] -> Assertion
+-- spendCollateralOutput =
+--   withFullConfig babbageConfigDir testLabel $ \interpreter mockServer dbSync -> do
+--     startDBSync dbSync
+--     void $ registerAllStakeCreds interpreter mockServer
+
+--     tx0 <-
+--       withBabbageLedgerState interpreter $
+--         Babbage.mkLockByScriptTx (UTxOIndex 0) [Babbage.TxOutNoInline False] 20000 20000
+--     void $ forgeNextFindLeaderAndSubmit interpreter mockServer [TxBabbage tx0]
+
+--     -- tx fails so its collateral output become actual output.
+--     let utxo0 = head (Babbage.mkUTxOBabbage tx0)
+--     tx1 <-
+--       withBabbageLedgerState interpreter $
+--         Babbage.mkUnlockScriptTxBabbage [UTxOInput (fst utxo0)] (UTxOIndex 1) (UTxOIndex 2) [UTxOPair utxo0] True False 10000 500
+--     void $ forgeNextFindLeaderAndSubmit interpreter mockServer [TxBabbage tx1]
+--     assertBlockNoBackoff dbSync 3
+
+--     let utxo1 = head (Babbage.mkUTxOCollBabbage tx1)
+--     tx2 <-
+--       withBabbageLedgerState interpreter $
+--         Babbage.mkUnlockScriptTxBabbage [UTxOPair utxo1] (UTxOIndex 3) (UTxOIndex 1) [UTxOPair utxo1] False True 10000 500
+--     void $ forgeNextFindLeaderAndSubmit interpreter mockServer [TxBabbage tx2]
+
+--     assertBlockNoBackoff dbSync 4
+--     assertBabbageCounts dbSync (1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1)
+--   where
+--     testLabel = "spendCollateralOutput"

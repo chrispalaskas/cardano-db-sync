@@ -3,6 +3,7 @@ module Cardano.DbSync.Util.Whitelist where
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..), SyncOptions (..))
 import Cardano.DbSync.Config.Types (MultiAssetConfig (..), PlutusConfig (..), ShelleyInsertConfig (..))
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
+import Cardano.DbSync.Error (shortBsBase16Encode)
 import Cardano.Ledger.Crypto (StandardCrypto)
 import Cardano.Ledger.Mary.Value (PolicyID (..))
 import Cardano.Prelude (ByteString, NonEmpty)
@@ -61,4 +62,4 @@ shelleyInsertWhitelistCheck shelleyInsertOpts stakeAddress = do
   case shelleyInsertOpts of
     ShelleyEnable -> True
     ShelleyDisable -> True
-    ShelleyStakeAddrs shelleyWhitelist -> toShort stakeAddress `elem` shelleyWhitelist
+    ShelleyStakeAddrs shelleyWhitelist -> shortBsBase16Encode stakeAddress `elem` shelleyWhitelist

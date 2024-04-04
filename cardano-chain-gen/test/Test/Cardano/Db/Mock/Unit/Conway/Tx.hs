@@ -7,11 +7,8 @@ module Test.Cardano.Db.Mock.Unit.Conway.Tx (
   consumeSameBlock,
   addTxMetadata,
   addTxMetadataDisabled,
-  addTxMetadataWhitelist,
-  addTxMetadataWhitelistMultiple,
 ) where
 
-import Cardano.Api.Ledger (Coin (..))
 import Cardano.DbSync.Config (SyncNodeConfig (..))
 import Cardano.DbSync.Config.Types (MetadataConfig (..), SyncInsertOptions (..))
 import Cardano.Ledger.Shelley.TxAuxData (Metadatum (..))
@@ -21,7 +18,6 @@ import qualified Cardano.Mock.Forging.Tx.Shelley as Shelley
 import Cardano.Mock.Forging.Types (UTxOIndex (..))
 import Cardano.Mock.Query (queryNullTxDepositExists, queryTxMetadataCount)
 import Cardano.Prelude hiding (head)
-import Data.List.NonEmpty (fromList)
 import qualified Data.Map as Map
 import Test.Cardano.Db.Mock.Config
 import qualified Test.Cardano.Db.Mock.UnifiedApi as UnifiedApi
@@ -166,86 +162,4 @@ addTxMetadataDisabled ioManager metadata = do
       pure $
         initConfigFile
           { dncInsertOptions = dncInsertOptions' {sioMetadata = MetadataDisable}
-          }
-
--- 2 blocks each with 4 metadata entries.
--- The whitelist has one tx metadata key which is in the first block
--- so only the TX in the first block should have tx metadata kept.
-addTxMetadataWhitelist :: IOManager -> [(Text, Text)] -> Assertion
-addTxMetadataWhitelist ioManager metadata = do
-  syncNodeConfig <- mksNodeConfig
-  withCustomConfigAndDropDB args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
-  where
-    action = \interpreter mockServer dbSync -> do
-      startDBSync dbSync
-      -- Add transactions with metadata
-      void $ do
-        UnifiedApi.withConwayFindLeaderAndSubmitTx interpreter mockServer $ \_ ->
-          let txBody = Conway.mkDummyTxBodyWithFee $ Coin 1_000
-              auxData = Map.fromList [(1, I 1), (2, I 2), (3, I 3), (4, I 4)]
-           in Right (Conway.mkAuxDataTx True txBody auxData)
-      void $ do
-        UnifiedApi.withConwayFindLeaderAndSubmitTx interpreter mockServer $ \_ ->
-          let txBody = Conway.mkDummyTxBodyWithFee $ Coin 2_000
-              auxData = Map.fromList [(5, I 5), (6, I 6), (7, I 7), (8, I 8)]
-           in Right (Conway.mkAuxDataTx True txBody auxData)
-
-      assertBlockNoBackoff dbSync 2
-      -- Should have first block's tx metadata
-      assertEqBackoff dbSync queryTxMetadataCount 4 [] "Expected tx metadata"
-
-    args = initCommandLineArgs {claFullMode = False}
-    testLabel = "conwayConfigMetadataWhitelist"
-
-    cfgDir = conwayConfigDir
-
-    -- match all metadata keys of value 1
-    mksNodeConfig :: IO SyncNodeConfig
-    mksNodeConfig = do
-      initConfigFile <- mkSyncNodeConfig cfgDir args
-      let dncInsertOptions' = dncInsertOptions initConfigFile
-      pure $
-        initConfigFile
-          { dncInsertOptions = dncInsertOptions' {sioMetadata = MetadataKeys $ fromList [1]}
-          }
-
--- 2 blocks each with 4 metadata entries
--- The whitelist is set to keys [1,6] each key in in different TX
--- so all TxMetadata should be kept from both blocks.
-addTxMetadataWhitelistMultiple :: IOManager -> [(Text, Text)] -> Assertion
-addTxMetadataWhitelistMultiple ioManager metadata = do
-  syncNodeConfig <- mksNodeConfig
-  withCustomConfigAndDropDB args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
-  where
-    action = \interpreter mockServer dbSync -> do
-      startDBSync dbSync
-      -- Add transactions with metadata
-      void $ do
-        UnifiedApi.withConwayFindLeaderAndSubmitTx interpreter mockServer $ \_ ->
-          let txBody = Conway.mkDummyTxBodyWithFee $ Coin 1_000
-              auxData = Map.fromList [(1, I 1), (2, I 2), (3, I 3), (4, I 4)]
-           in Right (Conway.mkAuxDataTx True txBody auxData)
-      void $ do
-        UnifiedApi.withConwayFindLeaderAndSubmitTx interpreter mockServer $ \_ ->
-          let txBody = Conway.mkDummyTxBodyWithFee $ Coin 2_000
-              auxData = Map.fromList [(5, I 5), (6, I 6), (7, I 7), (8, I 8)]
-           in Right (Conway.mkAuxDataTx True txBody auxData)
-
-      assertBlockNoBackoff dbSync 2
-      -- Should have both block's tx metadata
-      assertEqBackoff dbSync queryTxMetadataCount 8 [] "Expected tx metadata"
-
-    args = initCommandLineArgs {claFullMode = False}
-    testLabel = "conwayConfigMetadataWhitelist"
-
-    cfgDir = conwayConfigDir
-
-    -- match all metadata keys of value 1
-    mksNodeConfig :: IO SyncNodeConfig
-    mksNodeConfig = do
-      initConfigFile <- mkSyncNodeConfig cfgDir args
-      let dncInsertOptions' = dncInsertOptions initConfigFile
-      pure $
-        initConfigFile
-          { dncInsertOptions = dncInsertOptions' {sioMetadata = MetadataKeys $ fromList [1, 6]}
           }

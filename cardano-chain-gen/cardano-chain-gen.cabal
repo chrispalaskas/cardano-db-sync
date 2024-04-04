@@ -168,6 +168,7 @@ test-suite cardano-chain-gen
                         Test.Cardano.Db.Mock.Unit.Conway.Simple
                         Test.Cardano.Db.Mock.Unit.Conway.Stake
                         Test.Cardano.Db.Mock.Unit.Conway.Tx
+                        Test.Cardano.Db.Mock.Unit.Conway.Whitelist
                         Test.Cardano.Db.Mock.UnifiedApi
                         Test.Cardano.Db.Mock.Validate
 

@@ -12,6 +12,7 @@ module Cardano.Mock.Query (
   queryConstitutionAnchor,
   queryRewardRests,
   queryMultiAssetMetadataPolicy,
+  queryStakeAddressHashRaw,
 ) where
 
 import qualified Cardano.Db as Db
