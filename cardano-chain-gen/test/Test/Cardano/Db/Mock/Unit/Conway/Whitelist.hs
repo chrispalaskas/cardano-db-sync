@@ -1,12 +1,12 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeApplications #-}
 
 module Test.Cardano.Db.Mock.Unit.Conway.Whitelist (
   addTxMultiAssetsWhitelist,
   addTxMetadataWhitelist,
   addTxMetadataWhitelistMultiple,
   addSimpleTxStakeAddrsWhitelist,
+  fullTxStakeAddressWhitelist,
 )
 where
 
@@ -30,6 +30,7 @@ import qualified Test.Cardano.Db.Mock.UnifiedApi as UnifiedApi
 import Test.Cardano.Db.Mock.Validate
 import Test.Tasty.HUnit (Assertion ())
 import Prelude (head, (!!))
+import Test.Cardano.Db.Mock.UnifiedApi (withConwayFindLeaderAndSubmit)
 
 addTxMultiAssetsWhitelist :: IOManager -> [(Text, Text)] -> Assertion
 addTxMultiAssetsWhitelist ioManager metadata = do
@@ -200,7 +201,7 @@ addTxMetadataWhitelistMultiple ioManager metadata = do
 addSimpleTxStakeAddrsWhitelist :: IOManager -> [(Text, Text)] -> Assertion
 addSimpleTxStakeAddrsWhitelist ioManager metadata = do
   syncNodeConfig <- mksNodeConfig
-  withCustomConfigAndLogs args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
+  withCustomConfigAndDropDB args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
   where
     action = \interpreter mockServer dbSync -> do
       -- Forge a block
@@ -218,7 +219,6 @@ addSimpleTxStakeAddrsWhitelist ioManager metadata = do
     testLabel = "conwayAddSimpleTx"
     args = initCommandLineArgs {claFullMode = False}
     cfgDir = conwayConfigDir
-
     shelleyStakeAddrShortBs = toShort "e0921c25093b263793a1baf36166b819543f5822c62f72571111111111"
     -- match all metadata keys of value 1
     mksNodeConfig :: IO SyncNodeConfig
@@ -235,32 +235,44 @@ addSimpleTxStakeAddrsWhitelist ioManager metadata = do
                 }
           }
 
--- spendCollateralOutput :: IOManager -> [(Text, Text)] -> Assertion
--- spendCollateralOutput =
---   withFullConfig babbageConfigDir testLabel $ \interpreter mockServer dbSync -> do
---     startDBSync dbSync
---     void $ registerAllStakeCreds interpreter mockServer
 
---     tx0 <-
---       withBabbageLedgerState interpreter $
---         Babbage.mkLockByScriptTx (UTxOIndex 0) [Babbage.TxOutNoInline False] 20000 20000
---     void $ forgeNextFindLeaderAndSubmit interpreter mockServer [TxBabbage tx0]
+fullTxStakeAddressWhitelist :: IOManager -> [(Text, Text)] -> Assertion
+fullTxStakeAddressWhitelist ioManager metadata = do
+  syncNodeConfig <- mksNodeConfig
+  withCustomConfigAndDropDB args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
+  where
+    action =
+        \interpreter mockServer dbSync -> do
+        startDBSync dbSync
+        -- Add some blocks with transactions
+        void $ withConwayFindLeaderAndSubmit interpreter mockServer $ \state' ->
+                sequence
+                        [ Conway.mkFullTx 0 100 state'
+                        -- , Conway.mkFullTx 1 200 state'
+                        ]
+        -- Wait for them to sync
+        assertBlockNoBackoff dbSync 1
+        assertTxCount dbSync 12
+        -- assertTxCount dbSync 13
 
---     -- tx fails so its collateral output become actual output.
---     let utxo0 = head (Babbage.mkUTxOBabbage tx0)
---     tx1 <-
---       withBabbageLedgerState interpreter $
---         Babbage.mkUnlockScriptTxBabbage [UTxOInput (fst utxo0)] (UTxOIndex 1) (UTxOIndex 2) [UTxOPair utxo0] True False 10000 500
---     void $ forgeNextFindLeaderAndSubmit interpreter mockServer [TxBabbage tx1]
---     assertBlockNoBackoff dbSync 3
-
---     let utxo1 = head (Babbage.mkUTxOCollBabbage tx1)
---     tx2 <-
---       withBabbageLedgerState interpreter $
---         Babbage.mkUnlockScriptTxBabbage [UTxOPair utxo1] (UTxOIndex 3) (UTxOIndex 1) [UTxOPair utxo1] False True 10000 500
---     void $ forgeNextFindLeaderAndSubmit interpreter mockServer [TxBabbage tx2]
-
---     assertBlockNoBackoff dbSync 4
---     assertBabbageCounts dbSync (1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1)
---   where
---     testLabel = "spendCollateralOutput"
+    testLabel = "fullTxStakeAddressWhitelist"
+    args = initCommandLineArgs {claFullMode = False}
+    cfgDir = conwayConfigDir
+    -- shelleyStakeAddr0 = toShort "e0addfa484e8095ff53f45b25cf337923cf79abe6ec192fdf288d621f9"
+    -- shelleyStakeAddr1 = toShort "e0921c25093b263793a1baf36166b819543f5822c62f72571111111111"
+    -- shelleyStakeAddr2 = toShort "e0921c25093b263793a1baf36166b819543f5822c62f72573333333333"
+    -- match all metadata keys of value 1
+    mksNodeConfig :: IO SyncNodeConfig
+    mksNodeConfig = do
+      initConfigFile <- mkSyncNodeConfig cfgDir args
+      let dncInsertOptions' = dncInsertOptions initConfigFile
+      pure $
+        initConfigFile
+          { dncInsertOptions =
+              dncInsertOptions'
+                { sioShelley =
+                    ShelleyEnable
+                    -- ShelleyStakeAddrs $
+                    --   fromList [shelleyStakeAddr0, shelleyStakeAddr1, shelleyStakeAddr2]
+                }
+          }
