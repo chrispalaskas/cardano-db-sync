@@ -19,18 +19,18 @@ import Cardano.Mock.ChainSync.Server (IOManager ())
 import qualified Cardano.Mock.Forging.Tx.Alonzo.ScriptsExamples as Examples
 import qualified Cardano.Mock.Forging.Tx.Conway as Conway
 import Cardano.Mock.Forging.Types
-import Cardano.Mock.Query (queryMultiAssetCount, queryMultiAssetMetadataPolicy, queryStakeAddressHashRaw, queryTxMetadataCount)
+import qualified Cardano.Mock.Query as MockQ
 import Cardano.Prelude hiding (head)
 import Data.ByteString.Short (toShort)
 import Data.List.NonEmpty (fromList)
 import qualified Data.Map as Map
 import Test.Cardano.Db.Mock.Config
+import Test.Cardano.Db.Mock.UnifiedApi (withConwayFindLeaderAndSubmit)
 import qualified Test.Cardano.Db.Mock.UnifiedApi as Api
 import qualified Test.Cardano.Db.Mock.UnifiedApi as UnifiedApi
 import Test.Cardano.Db.Mock.Validate
 import Test.Tasty.HUnit (Assertion ())
 import Prelude (head, (!!))
-import Test.Cardano.Db.Mock.UnifiedApi (withConwayFindLeaderAndSubmit)
 
 addTxMultiAssetsWhitelist :: IOManager -> [(Text, Text)] -> Assertion
 addTxMultiAssetsWhitelist ioManager metadata = do
@@ -91,9 +91,9 @@ addTxMultiAssetsWhitelist ioManager metadata = do
       assertBlockNoBackoff dbSync 1
       assertAlonzoCounts dbSync (2, 4, 1, 2, 4, 2, 0, 0)
       -- create 4 multi-assets but only 2 should be added due to the whitelist
-      assertEqBackoff dbSync queryMultiAssetCount 2 [] "Expected 2 multi-assets"
+      assertEqBackoff dbSync MockQ.queryMultiAssetCount 2 [] "Expected 2 multi-assets"
       -- do the policy match the whitelist
-      assertEqBackoff dbSync queryMultiAssetMetadataPolicy (Just policyShortBs) [] "Expected correct policy in db"
+      assertEqBackoff dbSync MockQ.queryMultiAssetMetadataPolicy (Just policyShortBs) [] "Expected correct policy in db"
 
     args = initCommandLineArgs {claFullMode = False}
     testLabel = "conwayConfigMultiAssetsWhitelist"
@@ -140,7 +140,7 @@ addTxMetadataWhitelist ioManager metadata = do
 
       assertBlockNoBackoff dbSync 2
       -- Should have first block's tx metadata
-      assertEqBackoff dbSync queryTxMetadataCount 4 [] "Expected tx metadata"
+      assertEqBackoff dbSync MockQ.queryTxMetadataCount 4 [] "Expected tx metadata"
 
     args = initCommandLineArgs {claFullMode = False}
     testLabel = "conwayConfigMetadataWhitelist"
@@ -181,7 +181,7 @@ addTxMetadataWhitelistMultiple ioManager metadata = do
 
       assertBlockNoBackoff dbSync 2
       -- Should have both block's tx metadata
-      assertEqBackoff dbSync queryTxMetadataCount 8 [] "Expected tx metadata"
+      assertEqBackoff dbSync MockQ.queryTxMetadataCount 8 [] "Expected tx metadata"
 
     args = initCommandLineArgs {claFullMode = False}
     testLabel = "conwayConfigMetadataWhitelist"
@@ -214,7 +214,7 @@ addSimpleTxStakeAddrsWhitelist ioManager metadata = do
       assertBlockNoBackoff dbSync 1
       assertTxCount dbSync 12
 
-      assertEqBackoff dbSync queryStakeAddressHashRaw (Just shelleyStakeAddrShortBs) [] "Expected matching stake address"
+      assertEqBackoff dbSync MockQ.queryStakeAddressHashRaw (Just shelleyStakeAddrShortBs) [] "Expected matching stake address"
 
     testLabel = "conwayAddSimpleTx"
     args = initCommandLineArgs {claFullMode = False}
@@ -235,33 +235,45 @@ addSimpleTxStakeAddrsWhitelist ioManager metadata = do
                 }
           }
 
-
 fullTxStakeAddressWhitelist :: IOManager -> [(Text, Text)] -> Assertion
 fullTxStakeAddressWhitelist ioManager metadata = do
   syncNodeConfig <- mksNodeConfig
-  withCustomConfigAndDropDB args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
+  withCustomConfig args (Just syncNodeConfig) cfgDir testLabel action ioManager metadata
   where
     action =
-        \interpreter mockServer dbSync -> do
+      \interpreter mockServer dbSync -> do
         startDBSync dbSync
         -- Add some blocks with transactions
         void $ withConwayFindLeaderAndSubmit interpreter mockServer $ \state' ->
-                sequence
-                        [ Conway.mkFullTx 0 100 state'
-                        -- , Conway.mkFullTx 1 200 state'
-                        ]
+          sequence
+            [ Conway.mkFullTx 0 100 state'
+            , Conway.mkFullTx 1 200 state'
+            ]
         -- Wait for them to sync
         assertBlockNoBackoff dbSync 1
-        assertTxCount dbSync 12
-        -- assertTxCount dbSync 13
+        assertTxCount dbSync 13
+        -- Check all tables that stake addresses effect
+        assertEqBackoff dbSync MockQ.queryStakeAddressCount 5 [] "Expected 5 stake addresses"
+        assertEqBackoff dbSync MockQ.queryCollateralTxOutCount 2 [] "Expected 1 collateral tx out"
+        assertEqBackoff dbSync MockQ.queryPoolUpdateCount 5 [] "Expected 3 pool updates"
+        assertEqBackoff dbSync MockQ.queryStakeDeRegCount 2 [] "Expected 1 stake deregistration"
+        assertEqBackoff dbSync MockQ.queryStakeRegCount 2 [] "Expected 1 stake registration"
+        assertEqBackoff dbSync MockQ.countTxOutNonNullStakeAddrIds 2 [] "Expected 1 non-null stake address id"
+    -- TODO: Cmdv: Missing tables that are currently blank:
+    -- delegation, epoch_stake, pool_owner, stake_deregistration
+    -- One's that are needed for sanchonet:
+    -- delegation_vote, gov_action_proposal, instant_reward, reserve,
+    -- treasury, treasury_withdrawl.
 
     testLabel = "fullTxStakeAddressWhitelist"
-    args = initCommandLineArgs {claFullMode = False}
+    args = initCommandLineArgs {claFullMode = True}
     cfgDir = conwayConfigDir
-    -- shelleyStakeAddr0 = toShort "e0addfa484e8095ff53f45b25cf337923cf79abe6ec192fdf288d621f9"
-    -- shelleyStakeAddr1 = toShort "e0921c25093b263793a1baf36166b819543f5822c62f72571111111111"
-    -- shelleyStakeAddr2 = toShort "e0921c25093b263793a1baf36166b819543f5822c62f72573333333333"
-    -- match all metadata keys of value 1
+    shelleyStakeAddr0 = toShort "e0addfa484e8095ff53f45b25cf337923cf79abe6ec192fdf288d621f9"
+    shelleyStakeAddr1 = toShort "e0921c25093b263793a1baf36166b819543f5822c62f72571111111111"
+    shelleyStakeAddr2 = toShort "e0921c25093b263793a1baf36166b819543f5822c62f72573333333333"
+    shelleyStakeAddr3 = toShort "e0000131350ac206583290486460934394208654903261221230945870"
+    shelleyStakeAddr4 = toShort "e022236827154873624578632414768234573268457923654973246472"
+
     mksNodeConfig :: IO SyncNodeConfig
     mksNodeConfig = do
       initConfigFile <- mkSyncNodeConfig cfgDir args
@@ -271,8 +283,7 @@ fullTxStakeAddressWhitelist ioManager metadata = do
           { dncInsertOptions =
               dncInsertOptions'
                 { sioShelley =
-                    ShelleyEnable
-                    -- ShelleyStakeAddrs $
-                    --   fromList [shelleyStakeAddr0, shelleyStakeAddr1, shelleyStakeAddr2]
+                    ShelleyStakeAddrs $
+                      fromList [shelleyStakeAddr0, shelleyStakeAddr1, shelleyStakeAddr2, shelleyStakeAddr3, shelleyStakeAddr4]
                 }
           }

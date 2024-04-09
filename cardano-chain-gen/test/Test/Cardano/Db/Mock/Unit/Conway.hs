@@ -170,7 +170,6 @@ unitTests iom knownMigrations =
         , test "tx with metadata whitelist multiple" Whitelist.addTxMetadataWhitelistMultiple
         , test "add simple tx, whitelist tx address" Whitelist.addSimpleTxStakeAddrsWhitelist
         , test "add full tx, with stake address whitelist" Whitelist.fullTxStakeAddressWhitelist
-
         ]
     , testGroup
         "Pools and smash"

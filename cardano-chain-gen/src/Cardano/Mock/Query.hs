@@ -13,10 +13,16 @@ module Cardano.Mock.Query (
   queryRewardRests,
   queryMultiAssetMetadataPolicy,
   queryStakeAddressHashRaw,
+  queryStakeAddressCount,
+  queryCollateralTxOutCount,
+  queryPoolUpdateCount,
+  queryStakeDeRegCount,
+  queryStakeRegCount,
+  countTxOutNonNullStakeAddrIds,
 ) where
 
 import qualified Cardano.Db as Db
-import Cardano.Prelude hiding (from)
+import Cardano.Prelude hiding (isNothing, from)
 import qualified Data.ByteString.Base16 as Base16
 import Data.ByteString.Short (ShortByteString, toShort)
 import Database.Esqueleto.Experimental
@@ -138,7 +144,6 @@ queryConstitutionAnchor epochNo = do
         `on` ( \(constit :& _ :& epoch) ->
                 just (constit ^. Db.ConstitutionId) ==. (epoch ^. Db.EpochStateConstitutionId)
              )
-
     where_ (epochState ^. Db.EpochStateEpochNo ==. val epochNo)
 
     pure (anchor ^. Db.VotingAnchorUrl, anchor ^. Db.VotingAnchorDataHash)

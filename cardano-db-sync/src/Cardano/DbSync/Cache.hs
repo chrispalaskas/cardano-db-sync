@@ -51,8 +51,6 @@ import Control.Concurrent.Class.MonadSTM.Strict (
   writeTVar,
  )
 import Control.Monad.Trans.Control (MonadBaseControl)
-import qualified Data.ByteString.Base16 as Base16
-import Data.ByteString.Short (toShort)
 import Data.Either.Combinators
 import qualified Data.Map.Strict as Map
 import Database.Persist.Postgresql (SqlBackend)
@@ -95,13 +93,6 @@ queryOrInsertRewardAccount ::
   Ledger.RewardAccount StandardCrypto ->
   ReaderT SqlBackend m (Maybe DB.StakeAddressId)
 queryOrInsertRewardAccount syncEnv cache cacheNew rewardAddr = do
-  liftIO $
-    logInfo (getTrace syncEnv) $
-      mconcat
-        [ "queryOrInsertRewardAccount: "
-        , show $ toShort . Base16.encode $ laBs
-        ]
-  -- check if the stake address is in the whitelist
   if shelleyInsertWhitelistCheck (ioShelley iopts) laBs
     then do
       eiAddrId <- queryRewardAccountWithCacheRetBs cache cacheUA rewardAddr
