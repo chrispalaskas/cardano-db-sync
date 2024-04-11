@@ -324,9 +324,11 @@ Maintains the ledger state, but doesn't use any of its data, except to load UTxO
 
 Shelley Properties:
 
-| Property          | Type      | Required |
-| :---------------- | :-------- | :------- |
-| [enable](#enable) | `boolean` | Optional |
+| Property                             | Type      | Required |
+| :----------------------------------- | :-------- | :------- |
+| [enable](#enable)                    | `boolean` | Optional |
+| [stake\_addresses](#stake-addresses) | `array`   | Optional |
+
 
 #### Enable
 
@@ -337,6 +339,54 @@ proposals. Does not control `epoch_stake` and `rewards`, For this check `ledger`
 
  * Type: `boolean`
 
+##### Stake Addresses
+
+Whitelist stake addresses. Only set values will be kept in the database, all others will be ignored.
+
+`stake_addresses`
+ 
+ * Type: `string`
+
+The string will be validated and needs to omit `\x` from the start of the hash eg:
+
+`\x6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
+should be entered as:
+`6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
+
+Be mindfull that whitelisting stake address will omit data being present from the following tables unless they have matching stake addresses.
+
++-----------------------+
+|      table name       |
+|-----------------------+
+| collateral_tx_out     |
+| delegation            |
+| delegation_vote       |
+| epoch_stake           |
+| gov_action_proposal   |
+| instant_reward        |
+| pool_owner            |
+| pool_update           |
+| reserve               |
+| stake_deregistration  |
+| stake_registration    |
+| treasury              |
+| treasury_withdrawal   |
+| tx_out                |
+| withdrawal            |
++-----------------------+
+
+#### Example
+
+```json
+"shelley": {
+  "enable": true
+  "stake_addresses": 
+    ["6c969320597b755454ff3653ad09725d590c570827a129aeb4385526"
+    ,"994cf4c18f5613ca49c275f63d464b6d95123bfa8985e82b24b5680b"
+    ]
+  }
+```
+
 ### Multi Asset
 
 `multi_asset`
@@ -345,9 +395,10 @@ proposals. Does not control `epoch_stake` and `rewards`, For this check `ledger`
 
 Multi Asset Properties:
 
-| Property            | Type      | Required |
-| :------------------ | :-------- | :------- |
-| [enable](#enable-1) | `boolean` | Optional |
+| Property              | Type      | Required |
+| :-------------------- | :-------- | :------- |
+| [enable](#enable-1)   | `boolean` | Optional |
+| [policies](#policies) | `array`   | Optional |
 
 #### Enable
 
@@ -356,6 +407,32 @@ Enables or disables multi assets tables and entries.
 `multi_asset.enable`
 
  * Type: `boolean`
+
+#### Policies
+
+Whitelist for multi asset policies hash. Only set values will be kept in the database, all others will be ignored.
+
+`policies`
+ 
+ * Type: `string`
+
+The string will be validated and needs to omit `\x` from the start of the hash eg:
+
+`\x6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
+should be entered as:
+`6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
+
+#### Example
+
+```json
+"multi_asset": {
+  "enable": true
+  "policies": 
+    ["6c969320597b755454ff3653ad09725d590c570827a129aeb4385526"
+    ,"994cf4c18f5613ca49c275f63d464b6d95123bfa8985e82b24b5680b"
+    ]
+  }
+```
 
 ### Metadata
 
@@ -386,6 +463,15 @@ If set, only keep metadata with the specified keys.
 
  * Type: `integer[]`
 
+#### Example
+
+```json
+"metadata": {
+  "enable": true
+  "keys": [12345, 6789]
+  }
+```
+
 ### Plutus
 
 `plutus`
@@ -394,9 +480,10 @@ If set, only keep metadata with the specified keys.
 
 Plutus Properties:
 
-| Property            | Type      | Required |
-| :------------------ | :-------- | :------- |
-| [enable](#enable-3) | `boolean` | Optional |
+| Property                         | Type      | Required |
+| :------------------------------- | :-------- | :------- |
+| [enable](#enable-3)              | `boolean` | Optional |
+| [script\_hashes](#script-hashes) | `string`  | Optional |
 
 #### Enable
 
@@ -405,6 +492,32 @@ Enables or disables most tables and entries related to plutus and scripts.
 `plutus.enable`
 
  * Type: `boolean`
+
+#### Script Hashes
+
+Whitelist for plutus hash. Only set values will be kept in the database, all others will be ignored.
+
+`script_hashes`
+ 
+ * Type: `string`
+
+The string will be validated and needs to omit `\x` from the start of the hash eg:
+
+`\x6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
+should be entered as:
+`6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
+
+#### Example
+
+```json
+"plututs": {
+  "enable": true
+  "script_hashes": 
+    ["6c969320597b755454ff3653ad09725d590c570827a129aeb4385526"
+    ,"994cf4c18f5613ca49c275f63d464b6d95123bfa8985e82b24b5680b"
+    ]
+  }
+```
 
 ### Governance
 

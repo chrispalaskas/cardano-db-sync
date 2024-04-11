@@ -22,7 +22,7 @@ module Cardano.Mock.Query (
 ) where
 
 import qualified Cardano.Db as Db
-import Cardano.Prelude hiding (isNothing, from)
+import Cardano.Prelude hiding (from, isNothing)
 import qualified Data.ByteString.Base16 as Base16
 import Data.ByteString.Short (ShortByteString, toShort)
 import Database.Esqueleto.Experimental
