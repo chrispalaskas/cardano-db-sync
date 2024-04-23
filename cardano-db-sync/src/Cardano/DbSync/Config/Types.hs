@@ -68,6 +68,7 @@ import qualified Data.Aeson as Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
 import Data.ByteString.Short (ShortByteString (), fromShort, toShort)
 import Data.Default.Class (Default (..))
+import qualified Data.Text as T
 import Ouroboros.Consensus.Cardano.CanHardFork (TriggerHardFork (..))
 
 newtype LogFileDir = LogFileDir
@@ -474,11 +475,12 @@ instance FromJSON ShelleyInsertConfig where
     enable <- obj .: "enable"
     stakeAddrs <- obj .:? "stake_addresses"
 
-    pure $
-      case (enable, stakeAddrs) of
-        (False, _) -> ShelleyDisable
-        (True, Nothing) -> ShelleyEnable
-        (True, Just addrs) -> ShelleyStakeAddrs (map parseShortByteString addrs)
+    case (enable, stakeAddrs) of
+      (False, _) -> pure ShelleyDisable
+      (True, Nothing) -> pure ShelleyEnable
+      (True, Just addrs) -> do
+        addrsParsed <- traverse parseValidateHash addrs
+        pure $ ShelleyStakeAddrs addrsParsed
 
 instance ToJSON MultiAssetConfig where
   toJSON cfg =
@@ -495,11 +497,12 @@ instance FromJSON MultiAssetConfig where
     enable <- obj .: "enable"
     policies <- obj .:? "policies"
 
-    pure $
-      case (enable, policies) of
-        (False, _) -> MultiAssetDisable
-        (True, Nothing) -> MultiAssetEnable
-        (True, Just ps) -> MultiAssetPolicies (map parseShortByteString ps)
+    case (enable, policies) of
+      (False, _) -> pure MultiAssetDisable
+      (True, Nothing) -> pure MultiAssetEnable
+      (True, Just ps) -> do
+        policiesParsed <- traverse parseValidateHash ps
+        pure $ MultiAssetPolicies policiesParsed
 
 instance ToJSON MetadataConfig where
   toJSON cfg =
@@ -537,11 +540,12 @@ instance FromJSON PlutusConfig where
     enable <- obj .: "enable"
     scriptHashes <- obj .:? "script_hashes"
 
-    pure $
-      case (enable, scriptHashes) of
-        (False, _) -> PlutusDisable
-        (True, Nothing) -> PlutusEnable
-        (True, Just hs) -> PlutusScripts (map parseShortByteString hs)
+    case (enable, scriptHashes) of
+      (False, _) -> pure PlutusDisable
+      (True, Nothing) -> pure PlutusEnable
+      (True, Just hs) -> do
+        hsParsed <- traverse parseValidateHash hs
+        pure $ PlutusScripts hsParsed
 
 instance ToJSON GovernanceConfig where
   toJSON = boolToEnableDisable . isGovernanceEnabled
@@ -601,8 +605,11 @@ enableDisableToBool = \case
   "disable" -> Just False
   _ -> Nothing
 
-parseShortByteString :: Text -> ShortByteString
-parseShortByteString = toShort . encodeUtf8
+parseValidateHash :: Text -> Parser ShortByteString
+parseValidateHash txt =
+  if "\\x" `T.isPrefixOf` txt
+    then fail $ "Invalid Hash: starts with \\x please adjust it:  " <> show txt
+    else pure $ toShort $ encodeUtf8 txt
 
 shortByteStringToJSON :: ShortByteString -> Aeson.Value
 shortByteStringToJSON = toJSON . decodeUtf8 . fromShort

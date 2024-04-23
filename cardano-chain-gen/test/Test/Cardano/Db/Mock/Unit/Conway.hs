@@ -36,6 +36,12 @@ unitTests iom knownMigrations =
         , testCase "default insert config" Config.defaultInsertConfig
         , testCase "insert config" Config.insertConfig
         , testGroup
+            "invalid whitelist hashes"
+            [ testCase "Fail if Shelley stake address hash is invalid" Config.invalidShelleyStkAddrHash
+            , testCase "Fail if multi-asset policies hash is invalid" Config.invalidMultiAssetPoliciesHash
+            , testCase "Fail if Plutus script hash invalid" Config.invalidPlutusScriptHash
+            ]
+        , testGroup
             "tx-out"
             [ test "consumed_by_tx_id column check" MigrateConsumedPruneTxOut.txConsumedColumnCheck
             , test "basic prune" MigrateConsumedPruneTxOut.basicPrune
