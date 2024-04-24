@@ -353,7 +353,7 @@ The string will be validated and needs to omit `\x` from the start of the hash e
 should be entered as:
 `6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
 
-Be mindfull that whitelisting stake address will omit data being present from the following tables unless they have matching stake addresses.
+Be mindfull that whitelisting stake address will omit data that does not match being present from the following tables.
 
 +-----------------------+
 |      table name       |
@@ -421,6 +421,17 @@ The string will be validated and needs to omit `\x` from the start of the hash e
 `\x6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
 should be entered as:
 `6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
+
+Be mindfull that whitelisting policies will omit data that does not match whitelist being present from the following tables.
+
++-----------------------+
+| table name            |
+| ----------------------+
+| datum                 |
+| script                |
+| tx_out                |
+| multi_assets          |
++-----------------------+
 
 #### Example
 
@@ -506,6 +517,17 @@ The string will be validated and needs to omit `\x` from the start of the hash e
 `\x6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
 should be entered as:
 `6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
+
+Be mindfull that whitelisting script hashes will omit data that does not match whitelist being present from the following tables.
+
++-----------------------+
+| table name            |
+| ----------------------+
+| datum                 |
+| script                |
+| tx_out                |
+| multi_assets          |
++-----------------------+
 
 #### Example
 
