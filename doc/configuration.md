@@ -355,9 +355,8 @@ should be entered as:
 
 Be mindfull that whitelisting stake address will omit data that does not match being present from the following tables.
 
-+-----------------------+
 |      table name       |
-|-----------------------+
+| :-------------------- |
 | collateral_tx_out     |
 | delegation            |
 | delegation_vote       |
@@ -365,15 +364,16 @@ Be mindfull that whitelisting stake address will omit data that does not match b
 | gov_action_proposal   |
 | instant_reward        |
 | pool_owner            |
+| pool_relay            |
 | pool_update           |
 | reserve               |
+| reward                |
 | stake_deregistration  |
 | stake_registration    |
 | treasury              |
 | treasury_withdrawal   |
 | tx_out                |
 | withdrawal            |
-+-----------------------+
 
 #### Example
 
@@ -424,14 +424,12 @@ should be entered as:
 
 Be mindfull that whitelisting policies will omit data that does not match whitelist being present from the following tables.
 
-+-----------------------+
 | table name            |
-| ----------------------+
+| :-------------------- |
 | datum                 |
 | script                |
 | tx_out                |
 | multi_assets          |
-+-----------------------+
 
 #### Example
 
@@ -520,14 +518,13 @@ should be entered as:
 
 Be mindfull that whitelisting script hashes will omit data that does not match whitelist being present from the following tables.
 
-+-----------------------+
+
 | table name            |
-| ----------------------+
+| :-------------------- |
 | datum                 |
 | script                |
 | tx_out                |
 | multi_assets          |
-+-----------------------+
 
 #### Example
 
