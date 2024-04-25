@@ -11,7 +11,6 @@ import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (Assertion, testCase)
 
-import Test.Cardano.Db.Mock.Config (expectFailSilent)
 import qualified Test.Cardano.Db.Mock.Unit.Babbage.CommandLineArg.ConfigFile as ConfigFile
 import qualified Test.Cardano.Db.Mock.Unit.Babbage.CommandLineArg.EpochDisabled as EpochDisabled
 import qualified Test.Cardano.Db.Mock.Unit.Babbage.CommandLineArg.ForceIndex as ForceIndex
@@ -25,6 +24,7 @@ import qualified Test.Cardano.Db.Mock.Unit.Babbage.Rollback as BabRollback
 import qualified Test.Cardano.Db.Mock.Unit.Babbage.Simple as BabSimple
 import qualified Test.Cardano.Db.Mock.Unit.Babbage.Stake as BabStake
 import qualified Test.Cardano.Db.Mock.Unit.Babbage.Tx as BabTx
+import Test.Cardano.Db.Mock.Validate (expectFailSilent)
 
 unitTests :: IOManager -> [(Text, Text)] -> TestTree
 unitTests iom knownMigrations =

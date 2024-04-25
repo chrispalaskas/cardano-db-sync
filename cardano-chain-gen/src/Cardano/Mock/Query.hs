@@ -147,7 +147,6 @@ queryConstitutionAnchor epochNo = do
     where_ (epochState ^. Db.EpochStateEpochNo ==. val epochNo)
 
     pure (anchor ^. Db.VotingAnchorUrl, anchor ^. Db.VotingAnchorDataHash)
-
   pure $ bimap (Db.unVoteUrl . unValue) unValue <$> res
 
 queryRewardRests ::
@@ -157,5 +156,4 @@ queryRewardRests = do
   res <- select $ do
     reward <- from $ table @Db.RewardRest
     pure (reward ^. Db.RewardRestType, reward ^. Db.RewardRestAmount)
-
   pure $ map (bimap unValue (Db.unDbLovelace . unValue)) res

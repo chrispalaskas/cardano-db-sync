@@ -2,7 +2,6 @@ module Test.Cardano.Db.Mock.Unit.Conway (unitTests) where
 
 import Cardano.Mock.ChainSync.Server (IOManager ())
 import Cardano.Prelude
-import Test.Cardano.Db.Mock.Config (expectFailSilent)
 import qualified Test.Cardano.Db.Mock.Unit.Conway.CommandLineArg.ConfigFile as ConfigFile
 import qualified Test.Cardano.Db.Mock.Unit.Conway.CommandLineArg.EpochDisabled as EpochDisabled
 import qualified Test.Cardano.Db.Mock.Unit.Conway.CommandLineArg.ForceIndex as ForceIndex
@@ -18,6 +17,7 @@ import qualified Test.Cardano.Db.Mock.Unit.Conway.Simple as Simple
 import qualified Test.Cardano.Db.Mock.Unit.Conway.Stake as Stake
 import qualified Test.Cardano.Db.Mock.Unit.Conway.Tx as Tx
 import qualified Test.Cardano.Db.Mock.Unit.Conway.Whitelist as Whitelist
+import Test.Cardano.Db.Mock.Validate (expectFailSilent)
 import Test.Tasty (TestTree (), testGroup)
 import Test.Tasty.HUnit (Assertion (), testCase)
 import Prelude (String ())

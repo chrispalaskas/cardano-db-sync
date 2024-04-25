@@ -68,7 +68,7 @@ import qualified Data.Aeson as Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
 import Data.ByteString.Short (ShortByteString (), fromShort, toShort)
 import Data.Default.Class (Default (..))
-import qualified Data.Text as T
+import qualified Data.Text as Text
 import Ouroboros.Consensus.Cardano.CanHardFork (TriggerHardFork (..))
 
 newtype LogFileDir = LogFileDir
@@ -607,7 +607,7 @@ enableDisableToBool = \case
 
 parseValidateHash :: Text -> Parser ShortByteString
 parseValidateHash txt =
-  if "\\x" `T.isPrefixOf` txt
+  if "\\x" `Text.isPrefixOf` txt
     then fail $ "Invalid Hash: starts with \\x please adjust it:  " <> show txt
     else pure $ toShort $ encodeUtf8 txt
 
