@@ -66,7 +66,7 @@ insertBlockUniversal syncEnv shouldLog withinTwoMins withinHalfHour blk details 
     mPhid <- lift $ queryPoolKeyWithCache syncEnv UpdateCache $ coerceKeyRole $ Generic.blkSlotLeader blk
     let epochNo = sdEpochNo details
 
-    slid <- lift . DB.insertSlotLeader $ Generic.mkSlotLeader (isShelleyEnabled $ ioShelley iopts) (Generic.unKeyHashRaw $ Generic.blkSlotLeader blk) (eitherToMaybe mPhid)
+    slid <- lift . DB.insertSlotLeader $ Generic.mkSlotLeader (isShelleyNotDisabled $ ioShelley iopts) (Generic.unKeyHashRaw $ Generic.blkSlotLeader blk) (eitherToMaybe mPhid)
     blkId <-
       lift . insertBlockAndCache cache $
         DB.Block

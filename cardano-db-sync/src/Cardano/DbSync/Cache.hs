@@ -30,7 +30,7 @@ where
 import Cardano.BM.Trace
 import qualified Cardano.Db as DB
 import Cardano.DbSync.Api (getTrace)
-import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..), SyncOptions (..))
+import Cardano.DbSync.Api.Types (SyncEnv (..))
 import Cardano.DbSync.Cache.Epoch (rollbackMapEpochInCache)
 import qualified Cardano.DbSync.Cache.LRU as LRU
 import Cardano.DbSync.Cache.Types (CacheAction (..), CacheInternal (..), CacheStatistics (..), CacheStatus (..), initCacheStatistics, isCacheActionUpdate)
@@ -39,7 +39,6 @@ import Cardano.DbSync.Era.Shelley.Query
 import Cardano.DbSync.Era.Util
 import Cardano.DbSync.Error
 import Cardano.DbSync.Types
-import Cardano.DbSync.Util.Whitelist (shelleyInsertWhitelistCheck)
 import qualified Cardano.Ledger.Address as Ledger
 import Cardano.Ledger.BaseTypes (Network)
 import Cardano.Ledger.Mary.Value
@@ -91,21 +90,12 @@ queryOrInsertRewardAccount ::
   CacheStatus ->
   CacheAction ->
   Ledger.RewardAccount StandardCrypto ->
-  ReaderT SqlBackend m (Maybe DB.StakeAddressId)
+  ReaderT SqlBackend m DB.StakeAddressId
 queryOrInsertRewardAccount syncEnv cache cacheNew rewardAddr = do
-  if shelleyInsertWhitelistCheck (ioShelley iopts) laBs
-    then do
-      eiAddrId <- queryRewardAccountWithCacheRetBs cache cacheUA rewardAddr
-      case eiAddrId of
-        Left (_err, bs) -> insertStakeAddress syncEnv rewardAddr (Just bs)
-        Right addrId -> pure $ Just addrId
-    else pure Nothing
-  where
-    -- this is the stake address of the reward account used when whitelisting
-    !laBs = Ledger.serialiseRewardAcnt (Ledger.RewardAcnt nw cred)
-    nw = Ledger.getRwdNetwork rewardAddr
-    cred = Ledger.getRwdCred rewardAddr
-    iopts = soptInsertOptions $ envOptions syncEnv
+  eiAddrId <- queryRewardAccountWithCacheRetBs cache cacheNew rewardAddr
+  case eiAddrId of
+    Left (_err, bs) -> insertStakeAddress syncEnv rewardAddr (Just bs)
+    Right addrId -> pure addrId
 
 queryOrInsertStakeAddress ::
   (MonadBaseControl IO m, MonadIO m) =>
@@ -114,7 +104,7 @@ queryOrInsertStakeAddress ::
   CacheAction ->
   Network ->
   StakeCred ->
-  ReaderT SqlBackend m (Maybe DB.StakeAddressId)
+  ReaderT SqlBackend m DB.StakeAddressId
 queryOrInsertStakeAddress syncEnv cache cacheUA nw cred =
   queryOrInsertRewardAccount syncEnv cache cacheUA $ Ledger.RewardAccount nw cred
 
@@ -125,24 +115,18 @@ insertStakeAddress ::
   SyncEnv ->
   Ledger.RewardAccount StandardCrypto ->
   Maybe ByteString ->
-  ReaderT SqlBackend m (Maybe DB.StakeAddressId)
-insertStakeAddress syncEnv rewardAddr stakeCredBs =
-  -- check if the address is in the whitelist
-  if shelleyInsertWhitelistCheck ioptsShelley addrBs
-    then do
-      stakeAddrsId <-
-        DB.insertStakeAddress $
-          DB.StakeAddress
-            { DB.stakeAddressHashRaw = addrBs
-            , DB.stakeAddressView = Generic.renderRewardAcnt rewardAddr
-            , DB.stakeAddressScriptHash = Generic.getCredentialScriptHash $ Ledger.getRwdCred rewardAddr
-            }
-      pure $ Just stakeAddrsId
-    else pure Nothing
+  ReaderT SqlBackend m DB.StakeAddressId
+insertStakeAddress _syncEnv rewardAddr stakeCredBs = do
+  DB.insertStakeAddress $
+    DB.StakeAddress
+      { DB.stakeAddressHashRaw = addrBs
+      , DB.stakeAddressView = Generic.renderRewardAcnt rewardAddr
+      , DB.stakeAddressScriptHash = Generic.getCredentialScriptHash $ Ledger.getRwdCred rewardAddr
+      }
   where
     addrBs = fromMaybe (Ledger.serialiseRewardAcnt rewardAddr) stakeCredBs
-    ioptsShelley = ioShelley . soptInsertOptions $ envOptions syncEnv
 
+------------------------------------------------------------------------------------------------
 queryRewardAccountWithCacheRetBs ::
   forall m.
   MonadIO m =>

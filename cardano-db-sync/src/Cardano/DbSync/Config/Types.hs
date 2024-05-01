@@ -44,7 +44,7 @@ module Cardano.DbSync.Config.Types (
   isTxOutEnabled,
   hasLedger,
   shouldUseLedger,
-  isShelleyEnabled,
+  isShelleyNotDisabled,
   isMultiAssetEnabled,
   isMetadataEnabled,
   isPlutusEnabled,
@@ -325,10 +325,10 @@ shouldUseLedger LedgerDisable = False
 shouldUseLedger LedgerEnable = True
 shouldUseLedger LedgerIgnore = False
 
-isShelleyEnabled :: ShelleyInsertConfig -> Bool
-isShelleyEnabled ShelleyDisable = False
-isShelleyEnabled ShelleyEnable = True
-isShelleyEnabled (ShelleyStakeAddrs _) = True
+isShelleyNotDisabled :: ShelleyInsertConfig -> Bool
+isShelleyNotDisabled ShelleyDisable = False
+isShelleyNotDisabled ShelleyEnable = True
+isShelleyNotDisabled (ShelleyStakeAddrs _) = True
 
 isMultiAssetEnabled :: MultiAssetConfig -> Bool
 isMultiAssetEnabled MultiAssetDisable = False
@@ -463,7 +463,7 @@ instance FromJSON LedgerInsertConfig where
 instance ToJSON ShelleyInsertConfig where
   toJSON cfg =
     Aeson.object
-      [ "enable" .= isShelleyEnabled cfg
+      [ "enable" .= isShelleyNotDisabled cfg
       , "stake_addresses" .= stakeAddrs cfg
       ]
     where

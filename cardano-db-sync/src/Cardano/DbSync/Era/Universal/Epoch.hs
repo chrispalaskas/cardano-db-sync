@@ -39,7 +39,8 @@ import Cardano.DbSync.Ledger.Event
 import Cardano.DbSync.Types
 import Cardano.DbSync.Util (whenStrictJust)
 import Cardano.DbSync.Util.Constraint (constraintNameEpochStake, constraintNameReward)
-import Cardano.Ledger.Address (RewardAccount (..))
+import Cardano.DbSync.Util.Whitelist (shelleyStakeAddrWhitelistCheck)
+import qualified Cardano.Ledger.Address as Ledger
 import Cardano.Ledger.BaseTypes (Network, unEpochInterval)
 import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Ledger.Binary.Version (getVersion)
@@ -215,21 +216,23 @@ insertEpochStake syncEnv nw epochNo stakeChunk = do
       CacheStatus ->
       (StakeCred, (Shelley.Coin, PoolKeyHash)) ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe DB.EpochStake)
-    mkStake cache (saddr, (coin, pool)) = do
-      mSaId <- lift $ queryOrInsertStakeAddress syncEnv cache CacheNew nw saddr
-      poolId <- lift $ queryPoolKeyOrInsert "insertEpochStake" syncEnv cache CacheNew (isShelleyEnabled $ ioShelley iopts) pool
-      case mSaId of
-        Nothing -> pure Nothing
-        Just saId ->
-          pure $
-            Just $
-              DB.EpochStake
-                { DB.epochStakeAddrId = saId
-                , DB.epochStakePoolId = poolId
-                , DB.epochStakeAmount = Generic.coinToDbLovelace coin
-                , DB.epochStakeEpochNo = unEpochNo epochNo -- The epoch where this delegation becomes valid.
-                }
-
+    mkStake cache (saddr, (coin, pool)) =
+      -- Check if the stake address is in the shelley whitelist
+      if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt nw saddr
+        then
+          ( do
+              saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache nw saddr
+              poolId <- lift $ queryPoolKeyOrInsert "insertEpochStake" syncEnv cache UpdateCache (isShelleyNotDisabled $ ioShelley iopts) pool
+              pure $
+                Just $
+                  DB.EpochStake
+                    { DB.epochStakeAddrId = saId
+                    , DB.epochStakePoolId = poolId
+                    , DB.epochStakeAmount = Generic.coinToDbLovelace coin
+                    , DB.epochStakeEpochNo = unEpochNo epochNo -- The epoch where this delegation becomes valid.
+                    }
+          )
+        else pure Nothing
     iopts = getInsertOptions syncEnv
 
 insertRewards ::
@@ -252,11 +255,13 @@ insertRewards syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = do
       (MonadBaseControl IO m, MonadIO m) =>
       (StakeCred, Set Generic.Reward) ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) [DB.Reward]
-    mkRewards (saddr, rset) = do
-      mSaId <- lift $ queryOrInsertStakeAddress syncEnv cache CacheNew nw saddr
-      case mSaId of
-        Nothing -> pure []
-        Just saId -> mapM (prepareReward saId) (Set.toList rset)
+    mkRewards (saddr, rset) =
+      -- Check if the stake address is in the shelley whitelist
+      if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt nw saddr
+        then do
+          saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache nw saddr
+          mapM (prepareReward saId) (Set.toList rset)
+        else pure []
 
     prepareReward ::
       (MonadBaseControl IO m, MonadIO m) =>
@@ -280,8 +285,7 @@ insertRewards syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = do
       PoolKeyHash ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) DB.PoolHashId
     queryPool poolHash =
-      lift (queryPoolKeyOrInsert "insertRewards" syncEnv cache CacheNew (isShelleyEnabled $ ioShelley iopts) poolHash)
-
+      lift (queryPoolKeyOrInsert "insertRewards" syncEnv cache UpdateCache (isShelleyEnabled $ ioShelley iopts) poolHash)
     iopts = getInsertOptions syncEnv
 
 insertRewardRests ::
@@ -303,11 +307,13 @@ insertInstantRewards syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = 
       (MonadBaseControl IO m, MonadIO m) =>
       (StakeCred, Set Generic.RewardRest) ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) [DB.RewardRest]
-    mkRewards (saddr, rset) = do
-      mSaId <- lift $ queryOrInsertStakeAddress syncEnv cache CacheNew nw saddr
-      case mSaId of
-        Nothing -> pure []
-        Just saId -> pure $ map (prepareReward saId) (Set.toList rset)
+    mkRewards (saddr, rset) =
+      -- Check if the stake address is in the shelley whitelist
+      if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw saddr
+        then do
+          saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache nw saddr
+          pure $ map (prepareReward saId) (Set.toList rset)
+        else pure []
 
     prepareReward ::
       DB.StakeAddressId ->

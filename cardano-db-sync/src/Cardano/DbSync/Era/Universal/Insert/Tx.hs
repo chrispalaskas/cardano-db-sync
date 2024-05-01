@@ -20,7 +20,7 @@ import Cardano.DbSync.Api
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..))
 import Cardano.DbSync.Cache.Types (CacheStatus (..))
 
-import Cardano.DbSync.Config.Types (MetadataConfig (..), MultiAssetConfig (..), PlutusConfig (..), isPlutusEnabled, isShelleyEnabled)
+import Cardano.DbSync.Config.Types (MetadataConfig (..), MultiAssetConfig (..), PlutusConfig (..), ShelleyInsertConfig (..), isPlutusEnabled, isShelleyNotDisabled)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Shelley.Generic.Metadata (TxMetadataValue (..), metadataValueToJsonNoSchema)
 import Cardano.DbSync.Era.Universal.Insert.Certificate (insertCertificate)
@@ -45,7 +45,7 @@ import Cardano.DbSync.Error
 import Cardano.DbSync.Ledger.Types (ApplyResult (..), getGovExpiresAt, lookupDepositsMap)
 import Cardano.DbSync.Util
 import Cardano.DbSync.Util.Cbor (serialiseTxMetadataToCbor)
-import Cardano.DbSync.Util.Whitelist (plutusMultiAssetWhitelistCheck)
+import Cardano.DbSync.Util.Whitelist (isPlutusScriptHashesInWhitelist, plutusMultiAssetWhitelistCheck, shelleyStkAddrWhitelistCheckWithAddr)
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Mary.Value (AssetName (..), MultiAsset (..), PolicyID (..))
@@ -54,7 +54,7 @@ import Control.Monad.Extra (mapMaybeM)
 import Control.Monad.Trans.Control (MonadBaseControl)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import Data.ByteString.Short (ShortByteString, toShort)
+import Data.ByteString.Short (ShortByteString)
 import qualified Data.Map.Strict as Map
 import Database.Persist.Sql (SqlBackend)
 import Ouroboros.Consensus.Cardano.Block (StandardCrypto)
@@ -152,23 +152,24 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
         mapM_ (insertDatum syncEnv cache txId) (Generic.txData tx)
         mapM_ (insertCollateralTxIn tracer txId) (Generic.txCollateralInputs tx)
         mapM_ (insertReferenceTxIn tracer txId) (Generic.txReferenceInputs tx)
-        mapM_ (insertCollateralTxOut syncEnv cache iopts (txId, txHash)) (Generic.txCollateralOutputs tx)
+        mapM_ (insertCollateralTxOut syncEnv cache (txId, txHash)) (Generic.txCollateralOutputs tx)
 
       txMetadata <- do
         case ioMetadata iopts of
           MetadataDisable -> pure mempty
-          MetadataEnable ->
-            prepareTxMetadata syncEnv Nothing txId (Generic.txMetadata tx)
+          MetadataEnable -> prepareTxMetadata syncEnv Nothing txId (Generic.txMetadata tx)
           MetadataKeys whitelist ->
             prepareTxMetadata syncEnv (Just whitelist) txId (Generic.txMetadata tx)
 
       mapM_
         (insertCertificate syncEnv isMember mDeposits blkId txId epochNo slotNo redeemers)
         $ Generic.txCertificates tx
-      when (isShelleyEnabled $ ioShelley iopts) $
+      when (isShelleyNotDisabled $ ioShelley iopts) $
         mapM_ (insertWithdrawals syncEnv cache txId redeemers) $
           Generic.txWithdrawals tx
-      when (isShelleyEnabled $ ioShelley iopts) $
+
+      when (isShelleyNotDisabled $ ioShelley iopts) $
+        -- TODO: cmdv SHELLEY
         mapM_ (lift . insertParamProposal blkId txId) $
           Generic.txParamProposal tx
 
@@ -188,6 +189,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
 
       when (ioGov iopts) $ do
         mapM_ (insertGovActionProposal syncEnv blkId txId (getGovExpiresAt applyResult epochNo) (getCommittee applyResult)) $ zip [0 ..] (Generic.txProposalProcedure tx)
+        -- TODO: cmdv SHELLEY
         mapM_ (insertVotingProcedures syncEnv txId) (Generic.txVotingProcedure tx)
 
       let !txIns = map (prepareTxIn txId redeemers) resolvedInputs
@@ -209,10 +211,20 @@ insertTxOut ::
   (DB.TxId, ByteString) ->
   Generic.TxOut ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe (ExtendedTxOut, [MissingMaTxOut]))
-insertTxOut syncEnv cache iopts (txId, txHash) (Generic.TxOut index addr value maMap mScript dt) = case ioPlutus iopts of
-  PlutusDisable -> buildExtendedTxOutPart2 Nothing Nothing
-  _ -> buildExtendedTxOutPart1
+insertTxOut syncEnv cache iopts (txId, txHash) (Generic.TxOut index addr value maMap mScript dt) =
+  case ioShelley iopts of
+    ShelleyStakeAddrs _ -> do
+      p <- liftIO $ shelleyStkAddrWhitelistCheckWithAddr syncEnv addr
+      if p
+        then plutusCheck
+        else pure Nothing
+    _other -> plutusCheck
   where
+    plutusCheck =
+      case ioPlutus iopts of
+        PlutusDisable -> buildExtendedTxOutPart2 Nothing Nothing
+        _other -> buildExtendedTxOutPart1
+
     buildExtendedTxOutPart1 ::
       (MonadBaseControl IO m, MonadIO m) =>
       ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe (ExtendedTxOut, [MissingMaTxOut]))
@@ -385,23 +397,14 @@ insertCollateralTxOut ::
   (DB.TxId, ByteString) ->
   Generic.TxOut ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertCollateralTxOut syncEnv cache iopts (txId, _txHash) (Generic.TxOut index addr value maMap mScript dt) = case ioPlutus iopts of
-  PlutusDisable -> do
-    _ <- insertColTxOutPart2 Nothing Nothing
-    pure ()
-  PlutusEnable -> insertColTxOutPart1
-  -- if we have a whitelist we need to check both txOutAddress OR txOutScript are in the whitelist
-  PlutusScripts whitelist ->
-    case (mScript, Generic.maybePaymentCred addr) of
-      (Just script, _) ->
-        if toShort (Generic.txScriptHash script) `elem` whitelist
-          then insertColTxOutPart1
-          else void $ insertColTxOutPart2 Nothing Nothing
-      (_, Just address) ->
-        if toShort address `elem` whitelist
-          then insertColTxOutPart1
-          else void $ insertColTxOutPart2 Nothing Nothing
-      (Nothing, Nothing) -> void $ insertColTxOutPart2 Nothing Nothing
+insertCollateralTxOut syncEnv cache (txId, _txHash) txout@(Generic.TxOut index addr value maMap mScript dt) = do
+  p <- liftIO $ shelleyStkAddrWhitelistCheckWithAddr syncEnv addr
+  -- check if shelley stake address is in the whitelist
+  when p $ do
+    -- check plutus script hash is in the whitelist
+    if isPlutusScriptHashesInWhitelist syncEnv [txout]
+      then insertColTxOutPart1
+      else void $ insertColTxOutPart2 Nothing Nothing
   where
     insertColTxOutPart1 = do
       mDatumId <- Generic.whenInlineDatum dt $ insertDatum syncEnv cache txId
@@ -428,7 +431,6 @@ insertCollateralTxOut syncEnv cache iopts (txId, _txHash) (Generic.TxOut index a
             , DB.collateralTxOutReferenceScriptId = mScriptId
             }
       pure ()
-
     -- TODO: Is there any reason to add new tables for collateral multi-assets/multi-asset-outputs
     hasScript :: Bool
     hasScript = maybe False Generic.hasCredScript (Generic.getPaymentCred addr)

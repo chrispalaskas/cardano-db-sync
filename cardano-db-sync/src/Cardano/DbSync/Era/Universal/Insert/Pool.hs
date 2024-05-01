@@ -32,6 +32,7 @@ import Cardano.DbSync.Era.Shelley.Query
 import Cardano.DbSync.Error
 import Cardano.DbSync.Types (PoolKeyHash)
 import Cardano.DbSync.Util
+import Cardano.DbSync.Util.Whitelist (shelleyStakeAddrWhitelistCheck)
 import qualified Cardano.Ledger.Address as Ledger
 import Cardano.Ledger.BaseTypes
 import qualified Cardano.Ledger.BaseTypes as Ledger
@@ -60,37 +61,34 @@ insertPoolRegister ::
   Word16 ->
   PoolP.PoolParams StandardCrypto ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertPoolRegister syncEnv cache isMember mdeposits network (EpochNo epoch) blkId txId idx params = do
-  poolHashId <- lift $ insertPoolKeyWithCache cache CacheNew (PoolP.ppId params)
-  mdId <- case strictMaybeToMaybe $ PoolP.ppMetadata params of
-    Just md -> Just <$> insertPoolMetaDataRef poolHashId txId md
-    Nothing -> pure Nothing
-  isRegistration <- isPoolRegistration poolHashId
-  let epochActivationDelay = if isRegistration then 2 else 3
-      deposit = if isRegistration then Generic.coinToDbLovelace . Generic.poolDeposit <$> mdeposits else Nothing
-  mSaId <- lift $ queryOrInsertRewardAccount syncEnv cache CacheNew (adjustNetworkTag $ PoolP.ppRewardAcnt params)
-  case mSaId of
-    Nothing -> pure ()
-    Just saId -> do
-      poolUpdateId <-
-        lift
-          . DB.insertPoolUpdate
-          $ DB.PoolUpdate
-            { DB.poolUpdateHashId = poolHashId
-            , DB.poolUpdateCertIndex = idx
-            , DB.poolUpdateVrfKeyHash = hashToBytes (PoolP.ppVrf params)
-            , DB.poolUpdatePledge = Generic.coinToDbLovelace (PoolP.ppPledge params)
-            , DB.poolUpdateRewardAddrId = saId
-            , DB.poolUpdateActiveEpochNo = epoch + epochActivationDelay
-            , DB.poolUpdateMetaId = mdId
-            , DB.poolUpdateMargin = realToFrac $ Ledger.unboundRational (PoolP.ppMargin params)
-            , DB.poolUpdateFixedCost = Generic.coinToDbLovelace (PoolP.ppCost params)
-            , DB.poolUpdateDeposit = deposit
-            , DB.poolUpdateRegisteredTxId = txId
-            }
-
-      mapM_ (insertPoolOwner syncEnv cache network poolUpdateId) $ toList (PoolP.ppOwners params)
-      mapM_ (insertPoolRelay poolUpdateId) $ toList (PoolP.ppRelays params)
+insertPoolRegister syncEnv cache isMember mdeposits network (EpochNo epoch) blkId txId idx params =
+  -- Check if the stake address is in the shelley whitelist
+  when (shelleyStakeAddrWhitelistCheck syncEnv $ adjustNetworkTag (PoolP.ppRewardAcnt params)) $ do
+    poolHashId <- lift $ insertPoolKeyWithCache cache UpdateCache (PoolP.ppId params)
+    mdId <- case strictMaybeToMaybe $ PoolP.ppMetadata params of
+      Just md -> Just <$> insertPoolMetaDataRef poolHashId txId md
+      Nothing -> pure Nothing
+    isRegistration <- isPoolRegistration poolHashId
+    let epochActivationDelay = if isRegistration then 2 else 3
+        deposit = if isRegistration then Generic.coinToDbLovelace . Generic.poolDeposit <$> mdeposits else Nothing
+    saId <- lift $ queryOrInsertRewardAccount syncEnv cache UpdateCache (adjustNetworkTag $ PoolP.ppRewardAcnt params)
+    poolUpdateId <-
+      lift
+        . DB.insertPoolUpdate
+        $ DB.PoolUpdate
+          { DB.poolUpdateHashId = poolHashId
+          , DB.poolUpdateCertIndex = idx
+          , DB.poolUpdateVrfKeyHash = hashToBytes (PoolP.ppVrf params)
+          , DB.poolUpdatePledge = Generic.coinToDbLovelace (PoolP.ppPledge params)
+          , DB.poolUpdateRewardAddrId = saId
+          , DB.poolUpdateActiveEpochNo = epoch + epochActivationDelay
+          , DB.poolUpdateMetaId = mdId
+          , DB.poolUpdateMargin = realToFrac $ Ledger.unboundRational (PoolP.ppMargin params)
+          , DB.poolUpdateFixedCost = Generic.coinToDbLovelace (PoolP.ppCost params)
+          , DB.poolUpdateRegisteredTxId = txId
+          }
+    mapM_ (insertPoolOwner syncEnv cache network poolUpdateId) $ toList (PoolP.ppOwners params)
+    mapM_ (insertPoolRelay poolUpdateId) $ toList (PoolP.ppRelays params)
   where
     isPoolRegistration :: MonadIO m => DB.PoolHashId -> ExceptT SyncNodeError (ReaderT SqlBackend m) Bool
     isPoolRegistration poolHashId =
@@ -112,14 +110,13 @@ insertPoolRetire ::
   (MonadBaseControl IO m, MonadIO m) =>
   SyncEnv ->
   CacheStatus ->
-  Cache ->
   DB.TxId ->
   EpochNo ->
   Word16 ->
   Ledger.KeyHash 'Ledger.StakePool StandardCrypto ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertPoolRetire syncEnv cache txId epochNum idx keyHash = do
-  poolId <- lift $ queryPoolKeyOrInsert "insertPoolRetire" syncEnv cache CacheNew True keyHash
+  poolId <- lift $ queryPoolKeyOrInsert "insertPoolRetire" syncEnv cache UpdateCache True keyHash
   void . lift . DB.insertPoolRetire $
     DB.PoolRetire
       { DB.poolRetireHashId = poolId
@@ -152,16 +149,15 @@ insertPoolOwner ::
   DB.PoolUpdateId ->
   Ledger.KeyHash 'Ledger.Staking StandardCrypto ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertPoolOwner syncEnv cache network poolUpdateId skh = do
-  mSaId <- lift $ queryOrInsertStakeAddress syncEnv cache CacheNew network (Ledger.KeyHashObj skh)
-  case mSaId of
-    Nothing -> pure ()
-    Just saId ->
-      void . lift . DB.insertPoolOwner $
-        DB.PoolOwner
-          { DB.poolOwnerAddrId = saId
-          , DB.poolOwnerPoolUpdateId = poolUpdateId
-          }
+insertPoolOwner syncEnv cache network poolUpdateId skh =
+  -- Check if the stake address is in the shelley whitelist
+  when (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt network (Ledger.KeyHashObj skh)) $ do
+    saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache network (Ledger.KeyHashObj skh)
+    void . lift . DB.insertPoolOwner $
+      DB.PoolOwner
+        { DB.poolOwnerAddrId = saId
+        , DB.poolOwnerPoolUpdateId = poolUpdateId
+        }
 
 insertPoolRelay ::
   (MonadBaseControl IO m, MonadIO m) =>

@@ -43,6 +43,7 @@ import Cardano.DbSync.Error
 import Cardano.DbSync.Ledger.Types
 import Cardano.DbSync.Util
 import Cardano.DbSync.Util.Bech32 (serialiseDrepToBech32)
+import Cardano.DbSync.Util.Whitelist (shelleyStakeAddrWhitelistCheck)
 import qualified Cardano.Ledger.Address as Ledger
 import Cardano.Ledger.BaseTypes
 import qualified Cardano.Ledger.BaseTypes as Ledger
@@ -79,43 +80,42 @@ insertGovActionProposal ::
   (Word64, ProposalProcedure StandardConway) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertGovActionProposal syncEnv blkId txId govExpiresAt mmCommittee (index, pp) = do
-  mAddrId <- lift $ queryOrInsertRewardAccount syncEnv cache UpdateCache $ pProcReturnAddr pp
-  case mAddrId of
-    Nothing -> pure ()
-    Just addrId -> do
-      votingAnchorId <- lift $ insertVotingAnchor txId DB.GovActionAnchor $ pProcAnchor pp
-      mParamProposalId <- lift $
-        case pProcGovAction pp of
-          ParameterChange _ pparams _ ->
-            Just <$> insertParamProposal blkId txId (convertConwayParamProposal pparams)
-          _ -> pure Nothing
-      prevGovActionDBId <- case mprevGovAction of
-        Nothing -> pure Nothing
-        Just prevGovActionId -> resolveGovActionProposal syncEnv prevGovActionId
-      govActionProposalId <-
-        lift $
-          DB.insertGovActionProposal $
-            DB.GovActionProposal
-              { DB.govActionProposalTxId = txId
-              , DB.govActionProposalIndex = index
-              , DB.govActionProposalPrevGovActionProposal = prevGovActionDBId
-              , DB.govActionProposalDeposit = Generic.coinToDbLovelace $ pProcDeposit pp
-              , DB.govActionProposalReturnAddress = addrId
-              , DB.govActionProposalExpiration = unEpochNo <$> govExpiresAt
-              , DB.govActionProposalVotingAnchorId = Just votingAnchorId
-              , DB.govActionProposalType = Generic.toGovAction $ pProcGovAction pp
-              , DB.govActionProposalDescription = Text.decodeUtf8 $ LBS.toStrict $ Aeson.encode (pProcGovAction pp)
-              , DB.govActionProposalParamProposal = mParamProposalId
-              , DB.govActionProposalRatifiedEpoch = Nothing
-              , DB.govActionProposalEnactedEpoch = Nothing
-              , DB.govActionProposalDroppedEpoch = Nothing
-              , DB.govActionProposalExpiredEpoch = Nothing
-              }
+  -- check if shelley stake address is in the whitelist
+  when (shelleyStakeAddrWhitelistCheck syncEnv $ pProcReturnAddr pp) $ do
+    addrId <- lift $ queryOrInsertRewardAccount syncEnv cache UpdateCache $ pProcReturnAddr pp
+    votingAnchorId <- lift $ insertVotingAnchor txId DB.GovActionAnchor $ pProcAnchor pp
+    mParamProposalId <- lift $
       case pProcGovAction pp of
-        TreasuryWithdrawals mp _ -> lift $ mapM_ (insertTreasuryWithdrawal govActionProposalId) (Map.toList mp)
-        UpdateCommittee _ removed added q -> lift $ insertNewCommittee govActionProposalId removed added q
-        NewConstitution _ constitution -> lift $ insertConstitution txId govActionProposalId constitution
-        _ -> pure ()
+        ParameterChange _ pparams _ ->
+          Just <$> insertParamProposal blkId txId (convertConwayParamProposal pparams)
+        _ -> pure Nothing
+    prevGovActionDBId <- case mprevGovAction of
+      Nothing -> pure Nothing
+      Just prevGovActionId -> resolveGovActionProposal syncEnv prevGovActionId
+    govActionProposalId <-
+      lift $
+        DB.insertGovActionProposal $
+          DB.GovActionProposal
+            { DB.govActionProposalTxId = txId
+            , DB.govActionProposalIndex = index
+            , DB.govActionProposalPrevGovActionProposal = prevGovActionDBId
+            , DB.govActionProposalDeposit = Generic.coinToDbLovelace $ pProcDeposit pp
+            , DB.govActionProposalReturnAddress = addrId
+            , DB.govActionProposalExpiration = unEpochNo <$> govExpiresAt
+            , DB.govActionProposalVotingAnchorId = Just votingAnchorId
+            , DB.govActionProposalType = Generic.toGovAction $ pProcGovAction pp
+            , DB.govActionProposalDescription = Text.decodeUtf8 $ LBS.toStrict $ Aeson.encode (pProcGovAction pp)
+            , DB.govActionProposalParamProposal = mParamProposalId
+            , DB.govActionProposalRatifiedEpoch = Nothing
+            , DB.govActionProposalEnactedEpoch = Nothing
+            , DB.govActionProposalDroppedEpoch = Nothing
+            , DB.govActionProposalExpiredEpoch = Nothing
+            }
+    case pProcGovAction pp of
+      TreasuryWithdrawals mp _ -> lift $ mapM_ (insertTreasuryWithdrawal govActionProposalId) (Map.toList mp)
+      UpdateCommittee _ removed added q -> lift $ insertNewCommittee govActionProposalId removed added q
+      NewConstitution _ constitution -> lift $ insertConstitution txId govActionProposalId constitution
+      _ -> pure ()
   where
     cache = envCache syncEnv
     mprevGovAction :: Maybe (GovActionId StandardCrypto) = case pProcGovAction pp of
@@ -126,22 +126,15 @@ insertGovActionProposal syncEnv blkId txId govExpiresAt mmCommittee (index, pp) 
       NewConstitution prv _ -> unGovPurposeId <$> strictMaybeToMaybe prv
       _ -> Nothing
 
-    insertTreasuryWithdrawal ::
-      DB.GovActionProposalId ->
-      (Ledger.RewardAcnt StandardCrypto, Coin) ->
-      ReaderT SqlBackend m (Maybe DB.TreasuryWithdrawalId)
     insertTreasuryWithdrawal gaId (rwdAcc, coin) = do
-      mAddrId <- queryOrInsertRewardAccount syncEnv cache UpdateCache rwdAcc
-      case mAddrId of
-        Nothing -> pure Nothing
-        Just addrId ->
-          Just <$> do
-            DB.insertTreasuryWithdrawal $
-              DB.TreasuryWithdrawal
-                { DB.treasuryWithdrawalGovActionProposalId = gaId
-                , DB.treasuryWithdrawalStakeAddressId = addrId
-                , DB.treasuryWithdrawalAmount = Generic.coinToDbLovelace coin
-                }
+      addrId <-
+        queryOrInsertRewardAccount cache UpdateCache rwdAcc
+      DB.insertTreasuryWithdrawal $
+        DB.TreasuryWithdrawal
+          { DB.treasuryWithdrawalGovActionProposalId = gaId
+          , DB.treasuryWithdrawalStakeAddressId = addrId
+          , DB.treasuryWithdrawalAmount = Generic.coinToDbLovelace coin
+          }
 
     insertNewCommittee ::
       Maybe DB.GovActionProposalId ->
@@ -151,6 +144,7 @@ insertGovActionProposal syncEnv blkId txId govExpiresAt mmCommittee (index, pp) 
       ReaderT SqlBackend m ()
     insertNewCommittee gapId removed added q = do
       void $ insertCommittee' gapId (updatedCommittee removed added q <$> mmCommittee) q
+
 
 insertCommittee :: (MonadIO m, MonadBaseControl IO m) => Maybe DB.GovActionProposalId -> Committee StandardConway -> ReaderT SqlBackend m DB.CommitteeId
 insertCommittee mgapId committee = do

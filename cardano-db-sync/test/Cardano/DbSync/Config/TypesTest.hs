@@ -82,7 +82,7 @@ prop_isShelleyEnabled = property $ do
   let shelleyCfg = sioShelley cfg
 
   -- Shelley is enabled if it is not ShelleyDisable
-  isShelleyEnabled shelleyCfg === (shelleyCfg /= ShelleyDisable)
+  isShelleyNotDisabled shelleyCfg === (shelleyCfg /= ShelleyDisable)
 
 prop_isMultiAssetEnabled :: Property
 prop_isMultiAssetEnabled = property $ do

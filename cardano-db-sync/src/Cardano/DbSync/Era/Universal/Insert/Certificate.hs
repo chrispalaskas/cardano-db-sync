@@ -45,6 +45,8 @@ import Cardano.DbSync.Era.Universal.Insert.Pool (IsPoolMember, insertPoolCert)
 import Cardano.DbSync.Error
 import Cardano.DbSync.Types
 import Cardano.DbSync.Util
+import Cardano.DbSync.Util.Whitelist (shelleyCustomStakeWhitelistCheck, shelleyStakeAddrWhitelistCheck)
+import qualified Cardano.Ledger.Address as Ledger
 import Cardano.Ledger.BaseTypes
 import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Ledger.CertState
@@ -82,19 +84,20 @@ insertCertificate ::
 insertCertificate syncEnv isMember mDeposits blkId txId epochNo slotNo redeemers (Generic.TxCertificate ridx idx cert) =
   case cert of
     Left (ShelleyTxCertDelegCert deleg) ->
-      when (isShelleyEnabled $ ioShelley iopts) $ insertDelegCert syncEnv network txId idx mRedeemerId epochNo slotNo deleg
+      when (isShelleyNotDisabled $ ioShelley iopts) $ insertDelegCert syncEnv network txId idx mRedeemerId epochNo slotNo deleg
     Left (ShelleyTxCertPool pool) ->
-      when (isShelleyEnabled $ ioShelley iopts) $ insertPoolCert syncEnv cache isMember network epochNo blkId txId idx pool
+      when (isShelleyNotDisabled $ ioShelley iopts) $ insertPoolCert syncEnv cache isMember network epochNo blkId txId idx pool
     Left (ShelleyTxCertMir mir) ->
-      when (isShelleyEnabled $ ioShelley iopts) $ insertMirCert syncEnv network txId idx mir
+      when (isShelleyNotDisabled $ ioShelley iopts) $ insertMirCert syncEnv network txId idx mir
     Left (ShelleyTxCertGenesisDeleg _gen) ->
-      when (isShelleyEnabled $ ioShelley iopts) $
+      when (isShelleyNotDisabled $ ioShelley iopts) $
         liftIO $
           logWarning tracer "insertCertificate: Unhandled DCertGenesis certificate"
     Right (ConwayTxCertDeleg deleg) ->
-      insertConwayDelegCert syncEnv mDeposits txId idx mRedeemerId epochNo slotNo deleg
+      when (isShelleyNotDisabled $ ioShelley iopts) $
+        insertConwayDelegCert syncEnv mDeposits txId idx mRedeemerId epochNo slotNo deleg
     Right (ConwayTxCertPool pool) ->
-      when (isShelleyEnabled $ ioShelley iopts) $ insertPoolCert syncEnv cache isMember network epochNo blkId txId idx pool
+      when (isShelleyNotDisabled $ ioShelley iopts) $ insertPoolCert syncEnv cache isMember network epochNo blkId txId idx pool
     Right (ConwayTxCertGov c) ->
       when (ioGov iopts) $ case c of
         ConwayRegDRep cred coin anchor ->
@@ -146,28 +149,28 @@ insertConwayDelegCert ::
 insertConwayDelegCert syncEnv mDeposits txId idx mRedeemerId epochNo slotNo dCert =
   case dCert of
     ConwayRegCert cred _dep ->
-      when (isShelleyEnabled $ ioShelley iopts) $
+      when (isShelleyNotDisabled $ ioShelley iopts) $
         insertStakeRegistration syncEnv epochNo txId idx $
           Generic.annotateStakingCred network cred
     ConwayUnRegCert cred _dep ->
-      when (isShelleyEnabled $ ioShelley iopts) $
+      when (isShelleyNotDisabled $ ioShelley iopts) $
         insertStakeDeregistration syncEnv network epochNo txId idx mRedeemerId cred
     ConwayDelegCert cred delegatee -> insertDeleg cred delegatee
     ConwayRegDelegCert cred delegatee _dep -> do
-      when (isShelleyEnabled $ ioShelley iopts) $
+      when (isShelleyNotDisabled $ ioShelley iopts) $
         insertStakeRegistration syncEnv epochNo txId idx $
           Generic.annotateStakingCred network cred
       insertDeleg cred delegatee
   where
     insertDeleg cred = \case
       DelegStake poolkh ->
-        when (isShelleyEnabled $ ioShelley iopts) $
+        when (isShelleyNotDisabled $ ioShelley iopts) $
           insertDelegation syncEnv cache network epochNo slotNo txId idx mRedeemerId cred poolkh
       DelegVote drep ->
         when (ioGov iopts) $
           insertDelegationVote syncEnv network txId idx cred drep
       DelegStakeVote poolkh drep -> do
-        when (isShelleyEnabled $ ioShelley iopts) $
+        when (isShelleyNotDisabled $ ioShelley iopts) $
           insertDelegation syncEnv cache network epochNo slotNo txId idx mRedeemerId cred poolkh
         when (ioGov iopts) $
           insertDelegationVote syncEnv network txId idx cred drep
@@ -198,35 +201,33 @@ insertMirCert syncEnv network txId idx mcert = do
       (MonadBaseControl IO m, MonadIO m) =>
       (StakeCred, Ledger.DeltaCoin) ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-    insertMirReserves (cred, dcoin) = do
-      mAddrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) CacheNew network cred
-      case mAddrId of
-        Nothing -> pure ()
-        Just addrId -> do
-          void . lift . DB.insertReserve $
-            DB.Reserve
-              { DB.reserveAddrId = addrId
-              , DB.reserveCertIndex = idx
-              , DB.reserveTxId = txId
-              , DB.reserveAmount = DB.deltaCoinToDbInt65 dcoin
-              }
+    insertMirReserves (cred, dcoin) =
+      -- Check if the stake address is in the shelley whitelist
+      when (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt network cred) $ do
+        addrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) CacheNew network cred
+        void . lift . DB.insertReserve $
+          DB.Reserve
+            { DB.reserveAddrId = addrId
+            , DB.reserveCertIndex = idx
+            , DB.reserveTxId = txId
+            , DB.reserveAmount = DB.deltaCoinToDbInt65 dcoin
+            }
 
     insertMirTreasury ::
       (MonadBaseControl IO m, MonadIO m) =>
       (StakeCred, Ledger.DeltaCoin) ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-    insertMirTreasury (cred, dcoin) = do
-      mAddrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) CacheNew network cred
-      case mAddrId of
-        Nothing -> pure ()
-        Just addrId -> do
-          void . lift . DB.insertTreasury $
-            DB.Treasury
-              { DB.treasuryAddrId = addrId
-              , DB.treasuryCertIndex = idx
-              , DB.treasuryTxId = txId
-              , DB.treasuryAmount = DB.deltaCoinToDbInt65 dcoin
-              }
+    insertMirTreasury (cred, dcoin) =
+      -- Check if the stake address is in the shelley whitelist
+      when (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt network cred) $ do
+        addrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) CacheNew network cred
+        void . lift . DB.insertTreasury $
+          DB.Treasury
+            { DB.treasuryAddrId = addrId
+            , DB.treasuryCertIndex = idx
+            , DB.treasuryTxId = txId
+            , DB.treasuryAmount = DB.deltaCoinToDbInt65 dcoin
+            }
 
     insertPotTransfer ::
       (MonadBaseControl IO m, MonadIO m) =>
@@ -337,18 +338,17 @@ insertStakeDeregistration ::
   StakeCred ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertStakeDeregistration syncEnv network epochNo txId idx mRedeemerId cred = do
-  mScId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) EvictAndReturn network cred
-  case mScId of
-    Nothing -> pure ()
-    Just scId ->
-      void . lift . DB.insertStakeDeregistration $
-        DB.StakeDeregistration
-          { DB.stakeDeregistrationAddrId = scId
-          , DB.stakeDeregistrationCertIndex = idx
-          , DB.stakeDeregistrationEpochNo = unEpochNo epochNo
-          , DB.stakeDeregistrationTxId = txId
-          , DB.stakeDeregistrationRedeemerId = mRedeemerId
-          }
+  -- Check if the stake address is in the  shelley whitelist
+  when (shelleyCustomStakeWhitelistCheck syncEnv $ Ledger.RewardAcnt network cred) $ do
+    scId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) EvictAndReturn network cred
+    void . lift . DB.insertStakeDeregistration $
+      DB.StakeDeregistration
+        { DB.stakeDeregistrationAddrId = scId
+        , DB.stakeDeregistrationCertIndex = idx
+        , DB.stakeDeregistrationEpochNo = unEpochNo epochNo
+        , DB.stakeDeregistrationTxId = txId
+        , DB.stakeDeregistrationRedeemerId = mRedeemerId
+        }
 
 insertStakeRegistration ::
   (MonadBaseControl IO m, MonadIO m) =>
@@ -360,21 +360,20 @@ insertStakeRegistration ::
   Shelley.RewardAccount StandardCrypto ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertStakeRegistration syncEnv epochNo mDeposits txId idx rewardAccount = do
-  -- We by-pass the cache here It's likely it won't hit.
-  -- We don't store to the cache yet, since there are many addrresses
-  -- which are registered and never used.
-  mSaId <- lift $ insertStakeAddress syncEnv rewardAccount Nothing
-  case mSaId of
-    Nothing -> pure ()
-    Just saId ->
-      void . lift . DB.insertStakeRegistration $
-        DB.StakeRegistration
-          { DB.stakeRegistrationAddrId = saId
-          , DB.stakeRegistrationCertIndex = idx
-          , DB.stakeRegistrationEpochNo = unEpochNo epochNo
-          , DB.stakeRegistrationDeposit = Generic.coinToDbLovelace . Generic.stakeKeyDeposit <$> mDeposits
-          , DB.stakeRegistrationTxId = txId
-          }
+  -- Check if the stake address is in the shelley whitelist
+  when (shelleyCustomStakeWhitelistCheck syncEnv rewardAccount) $ do
+    -- We by-pass the cache here It's likely it won't hit.
+    -- We don't store to the cache yet, since there are many addrresses
+    -- which are registered and never used.
+    saId <- lift $ insertStakeAddress syncEnv rewardAccount Nothing
+    void . lift . DB.insertStakeRegistration $
+      DB.StakeRegistration
+        { DB.stakeRegistrationAddrId = saId
+        , DB.stakeRegistrationCertIndex = idx
+        , DB.stakeRegistrationEpochNo = unEpochNo epochNo
+        , DB.stakeRegistrationDeposit = Generic.coinToDbLovelace . Generic.stakeKeyDeposit <$> mDeposits
+        , DB.stakeRegistrationTxId = txId
+        }
 
 --------------------------------------------------------------------------------------------
 -- Insert Pots
@@ -431,22 +430,21 @@ insertDelegation ::
   StakeCred ->
   Ledger.KeyHash 'Ledger.StakePool StandardCrypto ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertDelegation syncEnv cache network (EpochNo epoch) slotNo txId idx mRedeemerId cred poolkh = do
-  mAddrId <- lift $ queryOrInsertStakeAddress syncEnv cache CacheNew network cred
-  poolHashId <- lift $ queryPoolKeyOrInsert "insertDelegation" syncEnv cache CacheNew True poolkh
-  case mAddrId of
-    Nothing -> pure ()
-    Just addrId -> do
-      void . lift . DB.insertDelegation $
-        DB.Delegation
-          { DB.delegationAddrId = addrId
-          , DB.delegationCertIndex = idx
-          , DB.delegationPoolHashId = poolHashId
-          , DB.delegationActiveEpochNo = epoch + 2 -- The first epoch where this delegation is valid.
-          , DB.delegationTxId = txId
-          , DB.delegationSlotNo = unSlotNo slotNo
-          , DB.delegationRedeemerId = mRedeemerId
-          }
+insertDelegation syncEnv cache network (EpochNo epoch) slotNo txId idx mRedeemerId cred poolkh =
+  -- Check if the stake address is in the shelley whitelist
+  when (shelleyCustomStakeWhitelistCheck syncEnv $ Ledger.RewardAcnt network cred) $ do
+    addrId <- lift $ queryOrInsertStakeAddress syncEnv cache CacheNew network cred
+    poolHashId <- lift $ queryPoolKeyOrInsert "insertDelegation" syncEnv cache CacheNew True poolkh
+    void . lift . DB.insertDelegation $
+      DB.Delegation
+        { DB.delegationAddrId = addrId
+        , DB.delegationCertIndex = idx
+        , DB.delegationPoolHashId = poolHashId
+        , DB.delegationActiveEpochNo = epoch + 2 -- The first epoch where this delegation is valid.
+        , DB.delegationTxId = txId
+        , DB.delegationSlotNo = unSlotNo slotNo
+        , DB.delegationRedeemerId = mRedeemerId
+        }
 
 insertDelegationVote ::
   (MonadBaseControl IO m, MonadIO m) =>
@@ -457,19 +455,18 @@ insertDelegationVote ::
   StakeCred ->
   DRep StandardCrypto ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertDelegationVote syncEnv network txId idx cred drep = do
-  mAddrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) UpdateCache network cred
-  drepId <- lift $ insertDrep drep
-  case mAddrId of
-    Nothing -> pure ()
-    Just addrId -> do
-      void
-        . lift
-        . DB.insertDelegationVote
-        $ DB.DelegationVote
-          { DB.delegationVoteAddrId = addrId
-          , DB.delegationVoteCertIndex = idx
-          , DB.delegationVoteDrepHashId = drepId
-          , DB.delegationVoteTxId = txId
-          , DB.delegationVoteRedeemerId = Nothing
-          }
+insertDelegationVote syncEnv network txId idx cred drep =
+  -- Check if the stake address is in the shelley whitelist
+  when (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt network cred) $ do
+    addrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) UpdateCache network cred
+    drepId <- lift $ insertDrep drep
+    void
+      . lift
+      . DB.insertDelegationVote
+      $ DB.DelegationVote
+        { DB.delegationVoteAddrId = addrId
+        , DB.delegationVoteCertIndex = idx
+        , DB.delegationVoteDrepHashId = drepId
+        , DB.delegationVoteTxId = txId
+        , DB.delegationVoteRedeemerId = Nothing
+        }

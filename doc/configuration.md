@@ -516,20 +516,18 @@ The string will be validated and needs to omit `\x` from the start of the hash e
 should be entered as:
 `6c969320597b755454ff3653ad09725d590c570827a129aeb4385526`
 
-Be mindfull that whitelisting script hashes will omit data that does not match whitelist being present from the following tables.
+Be mindfull that whitelisting script hashes will be Null in the following tables.
 
 
 | table name            |
 | :-------------------- |
-| datum                 |
-| script                |
 | tx_out                |
-| multi_assets          |
+| collateral_tx_out     |
 
 #### Example
 
 ```json
-"plututs": {
+"plutus": {
   "enable": true
   "script_hashes": 
     ["6c969320597b755454ff3653ad09725d590c570827a129aeb4385526"

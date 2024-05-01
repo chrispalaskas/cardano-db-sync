@@ -29,6 +29,7 @@ import Cardano.DbSync.Era.Universal.Insert.Grouped
 import Cardano.DbSync.Era.Util (safeDecodeToJson)
 import Cardano.DbSync.Error
 import Cardano.DbSync.Util
+import Cardano.DbSync.Util.Whitelist (shelleyStakeAddrWhitelistCheck)
 import qualified Cardano.Ledger.Address as Ledger
 import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Ledger.Coin (Coin (..))
@@ -134,20 +135,19 @@ insertWithdrawals ::
   Generic.TxWithdrawal ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertWithdrawals syncEnv cache txId redeemers txWdrl = do
-  mAddrId <-
-    lift $ queryOrInsertRewardAccount syncEnv cache CacheNew $ Generic.txwRewardAccount txWdrl
-  case mAddrId of
-    Nothing -> pure ()
-    Just addrId ->
-      void
-        . lift
-        . DB.insertWithdrawal
-        $ DB.Withdrawal
-          { DB.withdrawalAddrId = addrId
-          , DB.withdrawalTxId = txId
-          , DB.withdrawalAmount = Generic.coinToDbLovelace $ Generic.txwAmount txWdrl
-          , DB.withdrawalRedeemerId = mlookup (Generic.txwRedeemerIndex txWdrl) redeemers
-          }
+  -- check if shelley stake address is in the whitelist
+  when (shelleyStakeAddrWhitelistCheck syncEnv $ Generic.txwRewardAccount txWdrl) $ do
+    addrId <-
+      lift $ queryOrInsertRewardAccount syncEnv cache UpdateCache $ Generic.txwRewardAccount txWdrl
+    void
+      . lift
+      . DB.insertWithdrawal
+      $ DB.Withdrawal
+        { DB.withdrawalAddrId = addrId
+        , DB.withdrawalTxId = txId
+        , DB.withdrawalAmount = Generic.coinToDbLovelace $ Generic.txwAmount txWdrl
+        , DB.withdrawalRedeemerId = mlookup (Generic.txwRedeemerIndex txWdrl) redeemers
+        }
 
 -- | Insert a stake address if it is not already in the `stake_address` table. Regardless of
 -- whether it is newly inserted or it is already there, we retrun the `StakeAddressId`.
@@ -163,7 +163,11 @@ insertStakeAddressRefIfMissing syncEnv cache addr =
     Ledger.Addr nw _pcred sref ->
       case sref of
         Ledger.StakeRefBase cred -> do
-          queryOrInsertStakeAddress syncEnv cache DontCacheNew nw cred
+          -- Check if the stake address is in the shelley whitelist
+          if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt nw cred
+            then do
+              Just <$> queryOrInsertStakeAddress syncEnv cache DoNotUpdateCache nw cred
+            else pure Nothing
         Ledger.StakeRefPtr ptr -> do
           queryStakeRefPtr ptr
         Ledger.StakeRefNull -> pure Nothing
