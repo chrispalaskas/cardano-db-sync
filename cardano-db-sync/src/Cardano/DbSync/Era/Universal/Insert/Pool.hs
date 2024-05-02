@@ -63,7 +63,7 @@ insertPoolRegister ::
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertPoolRegister syncEnv cache isMember mdeposits network (EpochNo epoch) blkId txId idx params =
   -- Check if the stake address is in the shelley whitelist
-  when (shelleyStakeAddrWhitelistCheck syncEnv $ adjustNetworkTag (PoolP.ppRewardAcnt params)) $ do
+  when (shelleyStakeAddrWhitelistCheck syncEnv $ adjustNetworkTag (PoolP.ppRewardAccount params)) $ do
     poolHashId <- lift $ insertPoolKeyWithCache cache UpdateCache (PoolP.ppId params)
     mdId <- case strictMaybeToMaybe $ PoolP.ppMetadata params of
       Just md -> Just <$> insertPoolMetaDataRef poolHashId txId md
@@ -85,6 +85,7 @@ insertPoolRegister syncEnv cache isMember mdeposits network (EpochNo epoch) blkI
           , DB.poolUpdateMetaId = mdId
           , DB.poolUpdateMargin = realToFrac $ Ledger.unboundRational (PoolP.ppMargin params)
           , DB.poolUpdateFixedCost = Generic.coinToDbLovelace (PoolP.ppCost params)
+          , DB.poolUpdateDeposit = deposit
           , DB.poolUpdateRegisteredTxId = txId
           }
     mapM_ (insertPoolOwner syncEnv cache network poolUpdateId) $ toList (PoolP.ppOwners params)
@@ -210,7 +211,7 @@ insertPoolCert ::
   Word16 ->
   PoolCert StandardCrypto ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertPoolCert syncEnv cache isMember network epoch blkId txId idx pCert =
+insertPoolCert syncEnv cache isMember mdeposits network epoch blkId txId idx pCert =
   case pCert of
-    RegPool pParams -> insertPoolRegister syncEnv (envCache syncEnv) isMember network epoch blkId txId idx pParams
+    RegPool pParams -> insertPoolRegister syncEnv (envCache syncEnv) isMember mdeposits network epoch blkId txId idx pParams
     RetirePool keyHash epochNum -> insertPoolRetire syncEnv cache txId epochNum idx keyHash

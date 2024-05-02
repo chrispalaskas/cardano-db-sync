@@ -164,7 +164,7 @@ insertStakeAddressRefIfMissing syncEnv cache addr =
       case sref of
         Ledger.StakeRefBase cred -> do
           -- Check if the stake address is in the shelley whitelist
-          if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt nw cred
+          if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw cred
             then do
               Just <$> queryOrInsertStakeAddress syncEnv cache DoNotUpdateCache nw cred
             else pure Nothing

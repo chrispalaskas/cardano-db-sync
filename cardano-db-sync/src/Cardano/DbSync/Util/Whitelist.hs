@@ -80,12 +80,12 @@ shelleyStkAddrWhitelistCheckWithAddr syncEnv addr = do
     Ledger.AddrBootstrap {} -> False
     Ledger.Addr network _pcred stakeRef ->
       case stakeRef of
-        Ledger.StakeRefBase cred -> shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt network cred
+        Ledger.StakeRefBase cred -> shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount network cred
         Ledger.StakeRefPtr _ -> True
         Ledger.StakeRefNull -> True
 
 -- | This allows ShelleyDisabled to also pass through for specific cases.
-shelleyCustomStakeWhitelistCheck :: SyncEnv -> Ledger.RewardAcnt StandardCrypto -> Bool
+shelleyCustomStakeWhitelistCheck :: SyncEnv -> Ledger.RewardAccount StandardCrypto -> Bool
 shelleyCustomStakeWhitelistCheck syncEnv rwdAcc = do
   case ioShelley iopts of
     ShelleyDisable -> True
@@ -94,7 +94,7 @@ shelleyCustomStakeWhitelistCheck syncEnv rwdAcc = do
   where
     iopts = soptInsertOptions $ envOptions syncEnv
 
-shelleyStakeAddrWhitelistCheck :: SyncEnv -> Ledger.RewardAcnt StandardCrypto -> Bool
+shelleyStakeAddrWhitelistCheck :: SyncEnv -> Ledger.RewardAccount StandardCrypto -> Bool
 shelleyStakeAddrWhitelistCheck syncEnv rwdAcc = do
   case ioShelley iopts of
     ShelleyDisable -> False
@@ -104,10 +104,10 @@ shelleyStakeAddrWhitelistCheck syncEnv rwdAcc = do
     iopts = soptInsertOptions $ envOptions syncEnv
 
 -- | Check Shelley is enabled and if the stake address is in the whitelist
-checkShelleyWhitelist :: NonEmpty ShortByteString -> Ledger.RewardAcnt StandardCrypto -> Bool
+checkShelleyWhitelist :: NonEmpty ShortByteString -> Ledger.RewardAccount StandardCrypto -> Bool
 checkShelleyWhitelist shelleyWhitelist rwdAcc = do
   shortBsBase16Encode stakeAddress `elem` shelleyWhitelist
   where
-    network = Ledger.getRwdNetwork rwdAcc
-    rewardCred = Ledger.getRwdCred rwdAcc
-    stakeAddress = Ledger.serialiseRewardAcnt (Ledger.RewardAcnt network rewardCred)
+    network = Ledger.raNetwork rwdAcc
+    rewardCred = Ledger.raCredential rwdAcc
+    stakeAddress = Ledger.serialiseRewardAccount (Ledger.RewardAccount network rewardCred)

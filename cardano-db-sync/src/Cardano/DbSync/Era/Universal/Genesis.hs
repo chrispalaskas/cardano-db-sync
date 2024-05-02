@@ -296,8 +296,8 @@ insertStaking syncEnv blkId genesis = do
   let stakes = zip [0 ..] $ ListMap.toList (sgsStake $ sgStaking genesis)
   forM_ stakes $ \(n, (keyStaking, keyPool)) -> do
     -- TODO: add initial deposits for genesis stake keys.
-    insertStakeRegistration syncEnv (EpochNo 0) txId (2 * n) (Generic.annotateStakingCred network (KeyHashObj keyStaking))
-    insertDelegation syncEnv UninitiatedCache network 0 0 txId (2 * n + 1) Nothing (KeyHashObj keyStaking) keyPool
+    insertStakeRegistration syncEnv (EpochNo 0) Nothing txId (2 * n) (Generic.annotateStakingCred network (KeyHashObj keyStaking))
+    insertDelegation syncEnv UninitiatedCache network (EpochNo 0) 0 txId (2 * n + 1) Nothing (KeyHashObj keyStaking) keyPool
 
 -- -----------------------------------------------------------------------------
 

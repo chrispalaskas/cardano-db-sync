@@ -127,6 +127,10 @@ insertGovActionProposal syncEnv blkId txId govExpiresAt mmCommittee (index, pp) 
       NewConstitution prv _ -> unGovPurposeId <$> strictMaybeToMaybe prv
       _ -> Nothing
 
+    insertTreasuryWithdrawal ::
+      DB.GovActionProposalId ->
+      (Ledger.RewardAccount StandardCrypto, Coin) ->
+      ReaderT SqlBackend m DB.TreasuryWithdrawalId
     insertTreasuryWithdrawal gaId (rwdAcc, coin) = do
       addrId <-
         queryOrInsertRewardAccount cache UpdateCache rwdAcc
@@ -408,35 +412,41 @@ insertCostModel _blkId cms =
 updateRatified ::
   forall m.
   MonadIO m =>
+  SyncEnv ->
   EpochNo ->
   [GovActionState StandardConway] ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-updateRatified epochNo ratifiedActions = do
+updateRatified syncEnv epochNo ratifiedActions = do
   forM_ ratifiedActions $ \action -> do
-    gaId <- resolveGovActionProposal $ gasId action
-    lift $ DB.updateGovActionRatified gaId (unEpochNo epochNo)
+    mGaId <- resolveGovActionProposal syncEnv $ gasId action
+    whenJust mGaId $ \gaId ->
+      lift $ DB.updateGovActionRatified gaId (unEpochNo epochNo)
 
 updateExpired ::
   forall m.
   MonadIO m =>
+  SyncEnv ->
   EpochNo ->
   [GovActionId StandardCrypto] ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-updateExpired epochNo ratifiedActions = do
+updateExpired syncEnv epochNo ratifiedActions = do
   forM_ ratifiedActions $ \action -> do
-    gaId <- resolveGovActionProposal action
-    lift $ DB.updateGovActionExpired gaId (unEpochNo epochNo)
+    mGaId <- resolveGovActionProposal syncEnv action
+    whenJust mGaId $ \gaId ->
+      lift $ DB.updateGovActionExpired gaId (unEpochNo epochNo)
 
 updateDropped ::
   forall m.
   MonadIO m =>
+  SyncEnv ->
   EpochNo ->
   [GovActionId StandardCrypto] ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-updateDropped epochNo ratifiedActions = do
+updateDropped syncEnv epochNo ratifiedActions = do
   forM_ ratifiedActions $ \action -> do
-    gaId <- resolveGovActionProposal action
-    lift $ DB.updateGovActionDropped gaId (unEpochNo epochNo)
+    mGaId <- resolveGovActionProposal syncEnv action
+    whenJust mGaId $ \gaId ->
+      lift $ DB.updateGovActionDropped gaId (unEpochNo epochNo)
 
 insertUpdateEnacted ::
   forall m.
@@ -448,17 +458,16 @@ insertUpdateEnacted ::
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertUpdateEnacted syncEnv blkId epochNo enactedState = do
   whenJust (strictMaybeToMaybe (grPParamUpdate govIds)) $ \prevId -> do
-    mGaId <- resolveGovActionProposal syncEnv $ getPrevId prevId
+    maybeGaId <- resolveGovActionProposal syncEnv $ getPrevId prevId
     case maybeGaId of
       Nothing -> pure ()
       Just gaId -> lift $ DB.updateGovActionEnacted gaId (unEpochNo epochNo)
 
   whenJust (strictMaybeToMaybe (grHardFork govIds)) $ \prevId -> do
-    mGaId <- resolveGovActionProposal $ unGovPurposeId prevId
-    case mGaId of
+    maybeGaId <- resolveGovActionProposal $ unGovPurposeId prevId
+    case maybeGaId of
       Nothing -> pure ()
       Just gaId -> void $ lift $ DB.updateGovActionEnacted gaId (unEpochNo epochNo)
-
   (mcommitteeId, mnoConfidenceGaId) <- handleCommittee syncEnv blkId
 
   constitutionId <- handleConstitution syncEnv blkId
@@ -545,3 +554,16 @@ handleConstitution syncEnv govIds = do
               , textShow constitutionIds
               ]
       pure constitutionId
+=======
+  whenJust (strictMaybeToMaybe (grCommittee enactedState)) $ \prevId -> do
+    maybeGaId <- resolveGovActionProposal syncEnv $ unGovPurposeId prevId
+    case maybeGaId of
+      Nothing -> pure ()
+      Just gaId -> lift $ DB.updateGovActionEnacted gaId (unEpochNo epochNo)
+
+  whenJust (strictMaybeToMaybe (grConstitution enactedState)) $ \prevId -> do
+    maybeGaId <- resolveGovActionProposal syncEnv $ unGovPurposeId prevId
+    case maybeGaId of
+      Nothing -> pure ()
+      Just gaId -> lift $ DB.updateGovActionEnacted gaId (unEpochNo epochNo)
+>>>>>>> 328815aa (fix merge conflict errors)

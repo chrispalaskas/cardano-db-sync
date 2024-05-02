@@ -76,11 +76,11 @@ insertOnNewEpoch syncEnv blkId slotNo epochNo newEpoch = do
   whenStrictJust (Generic.neDRepState newEpoch) $ \dreps -> when (ioGov iopts) $ do
     let (drepSnapshot, ratifyState) = finishDRepPulser dreps
     lift $ insertDrepDistr epochNo drepSnapshot
-    updateRatified epochNo (toList $ rsEnacted ratifyState)
-    updateExpired epochNo (toList $ rsExpired ratifyState)
-  whenStrictJust (Generic.neEnacted newEpoch) $ \enactedSt -> do
-    when (ioGov iopts) $ do
-      insertUpdateEnacted tracer blkId epochNo enactedSt
+    updateRatified syncEnv epochNo (toList $ rsEnacted ratifyState)
+    updateExpired syncEnv epochNo (toList $ rsExpired ratifyState)
+  whenStrictJust (Generic.neEnacted newEpoch) $ \enactedSt ->
+    when (ioGov iopts) $
+      updateEnacted syncEnv epochNo enactedSt
   where
     epochUpdate :: Generic.EpochUpdate
     epochUpdate = Generic.neEpochUpdate newEpoc
@@ -218,7 +218,7 @@ insertEpochStake syncEnv nw epochNo stakeChunk = do
       ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe DB.EpochStake)
     mkStake cache (saddr, (coin, pool)) =
       -- Check if the stake address is in the shelley whitelist
-      if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt nw saddr
+      if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw saddr
         then
           ( do
               saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache nw saddr
@@ -257,7 +257,7 @@ insertRewards syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = do
       ExceptT SyncNodeError (ReaderT SqlBackend m) [DB.Reward]
     mkRewards (saddr, rset) =
       -- Check if the stake address is in the shelley whitelist
-      if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt nw saddr
+      if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw saddr
         then do
           saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache nw saddr
           mapM (prepareReward saId) (Set.toList rset)
@@ -298,7 +298,7 @@ insertRewardRests ::
   CacheStatus ->
   [(StakeCred, Set Generic.RewardRest)] ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertInstantRewards syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = do
+insertRewardRests syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = do
   dbRewards <- concatMapM mkRewards rewardsChunk
   let chunckDbRewards = splittRecordsEvery 100000 dbRewards
   -- minimising the bulk inserts into hundred thousand chunks to improve performance
@@ -331,14 +331,14 @@ insertInstantRewards syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = 
 
 insertProposalRefunds ::
   (MonadBaseControl IO m, MonadIO m) =>
-  Trace IO Text ->
+  SyncEnv ->
   Network ->
   EpochNo ->
   EpochNo ->
   CacheStatus ->
   [GovActionRefunded] ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertProposalRefunds trce nw earnedEpoch spendableEpoch cache refunds = do
+insertProposalRefunds syncEnv nw earnedEpoch spendableEpoch cache refunds = do
   dbRewards <- mapM mkReward refunds
   lift $ DB.insertManyRewardRests dbRewards
   where
@@ -347,7 +347,7 @@ insertProposalRefunds trce nw earnedEpoch spendableEpoch cache refunds = do
       GovActionRefunded ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) DB.RewardRest
     mkReward refund = do
-      saId <- lift $ queryOrInsertStakeAddress trce cache UpdateCache nw (raCredential $ garReturnAddr refund)
+      saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache nw (Ledger.raCredential $ garReturnAddr refund)
       pure $
         DB.RewardRest
           { DB.rewardRestAddrId = saId

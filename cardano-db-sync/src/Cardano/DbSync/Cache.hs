@@ -120,11 +120,11 @@ insertStakeAddress _syncEnv rewardAddr stakeCredBs = do
   DB.insertStakeAddress $
     DB.StakeAddress
       { DB.stakeAddressHashRaw = addrBs
-      , DB.stakeAddressView = Generic.renderRewardAcnt rewardAddr
-      , DB.stakeAddressScriptHash = Generic.getCredentialScriptHash $ Ledger.getRwdCred rewardAddr
+      , DB.stakeAddressView = Generic.renderRewardAccount rewardAddr
+      , DB.stakeAddressScriptHash = Generic.getCredentialScriptHash $ Ledger.raCredential rewardAddr
       }
   where
-    addrBs = fromMaybe (Ledger.serialiseRewardAcnt rewardAddr) stakeCredBs
+    addrBs = fromMaybe (Ledger.serialiseRewardAccount rewardAddr) stakeCredBs
 
 ------------------------------------------------------------------------------------------------
 queryRewardAccountWithCacheRetBs ::
