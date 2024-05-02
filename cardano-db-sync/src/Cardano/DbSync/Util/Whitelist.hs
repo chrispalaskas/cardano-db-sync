@@ -2,8 +2,6 @@
 
 module Cardano.DbSync.Util.Whitelist where
 
-import Cardano.BM.Trace (logInfo)
-import Cardano.DbSync.Api (getTrace)
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..), SyncOptions (..))
 import Cardano.DbSync.Config.Types (MultiAssetConfig (..), PlutusConfig (..), ShelleyInsertConfig (..))
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
@@ -13,6 +11,7 @@ import qualified Cardano.Ledger.Credential as Ledger
 import Cardano.Ledger.Crypto (StandardCrypto)
 import Cardano.Ledger.Mary.Value (PolicyID (..))
 import Cardano.Prelude (NonEmpty)
+import Data.ByteString (ByteString)
 import Data.ByteString.Short (ShortByteString, toShort)
 import Data.Map (keys)
 
@@ -41,6 +40,15 @@ isPlutusScriptHashesInWhitelist syncEnv txOuts = do
     isAddressWhitelisted :: NonEmpty ShortByteString -> Generic.TxOut -> Bool
     isAddressWhitelisted whitelist txOut =
       maybe False ((`elem` whitelist) . toShort) (Generic.maybePaymentCred $ Generic.txOutAddress txOut)
+
+isSimplePlutusScriptHashInWhitelist :: SyncEnv -> ByteString -> Bool
+isSimplePlutusScriptHashInWhitelist syncEnv scriptHash = do
+  case ioPlutus iopts of
+    PlutusEnable -> True
+    PlutusDisable -> False
+    PlutusScripts plutusWhitelist -> toShort scriptHash `elem` plutusWhitelist
+  where
+    iopts = soptInsertOptions $ envOptions syncEnv
 
 isMAPoliciesInWhitelist :: SyncEnv -> [Generic.TxOut] -> Bool
 isMAPoliciesInWhitelist syncEnv txOuts = do
@@ -76,6 +84,7 @@ shelleyStkAddrWhitelistCheckWithAddr syncEnv addr = do
         Ledger.StakeRefPtr _ -> True
         Ledger.StakeRefNull -> True
 
+-- | This allows ShelleyDisabled to also pass through for specific cases.
 shelleyCustomStakeWhitelistCheck :: SyncEnv -> Ledger.RewardAcnt StandardCrypto -> Bool
 shelleyCustomStakeWhitelistCheck syncEnv rwdAcc = do
   case ioShelley iopts of

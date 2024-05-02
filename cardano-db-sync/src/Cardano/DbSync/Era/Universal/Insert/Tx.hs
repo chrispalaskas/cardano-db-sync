@@ -20,7 +20,7 @@ import Cardano.DbSync.Api
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..))
 import Cardano.DbSync.Cache.Types (CacheStatus (..))
 
-import Cardano.DbSync.Config.Types (MetadataConfig (..), MultiAssetConfig (..), PlutusConfig (..), ShelleyInsertConfig (..), isPlutusEnabled, isShelleyNotDisabled)
+import Cardano.DbSync.Config.Types (MetadataConfig (..), MultiAssetConfig (..), PlutusConfig (..), ShelleyInsertConfig (..), isPlutusModeActive, isShelleyModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Shelley.Generic.Metadata (TxMetadataValue (..), metadataValueToJsonNoSchema)
 import Cardano.DbSync.Era.Universal.Insert.Certificate (insertCertificate)
@@ -145,33 +145,31 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
       !redeemers <-
         Map.fromList
           <$> whenFalseMempty
-            (isPlutusEnabled $ ioPlutus iopts)
+            (isPlutusModeActive $ ioPlutus iopts)
             (mapM (insertRedeemer syncEnv disInOut (fst <$> groupedTxOut grouped) txId) (Generic.txRedeemer tx))
 
-      when (isPlutusEnabled $ ioPlutus iopts) $ do
+      when (isPlutusModeActive $ ioPlutus iopts) $ do
         mapM_ (insertDatum syncEnv cache txId) (Generic.txData tx)
         mapM_ (insertCollateralTxIn tracer txId) (Generic.txCollateralInputs tx)
         mapM_ (insertReferenceTxIn tracer txId) (Generic.txReferenceInputs tx)
         mapM_ (insertCollateralTxOut syncEnv cache (txId, txHash)) (Generic.txCollateralOutputs tx)
+        mapM_ (lift . insertScript syncEnv txId) $ Generic.txScripts tx
+        mapM_ (insertExtraKeyWitness txId) $ Generic.txExtraKeyWitnesses tx
 
       txMetadata <- do
         case ioMetadata iopts of
           MetadataDisable -> pure mempty
           MetadataEnable -> prepareTxMetadata syncEnv Nothing txId (Generic.txMetadata tx)
-          MetadataKeys whitelist ->
-            prepareTxMetadata syncEnv (Just whitelist) txId (Generic.txMetadata tx)
+          MetadataKeys whitelist -> prepareTxMetadata syncEnv (Just whitelist) txId (Generic.txMetadata tx)
 
       mapM_
         (insertCertificate syncEnv isMember mDeposits blkId txId epochNo slotNo redeemers)
         $ Generic.txCertificates tx
-      when (isShelleyNotDisabled $ ioShelley iopts) $
-        mapM_ (insertWithdrawals syncEnv cache txId redeemers) $
-          Generic.txWithdrawals tx
 
-      when (isShelleyNotDisabled $ ioShelley iopts) $
+      when (isShelleyModeActive $ ioShelley iopts) $ do
+        mapM_ (insertWithdrawals syncEnv cache txId redeemers) $ Generic.txWithdrawals tx
         -- TODO: cmdv SHELLEY
-        mapM_ (lift . insertParamProposal blkId txId) $
-          Generic.txParamProposal tx
+        mapM_ (lift . insertParamProposal blkId txId) $ Generic.txParamProposal tx
 
       maTxMint <-
         case ioMultiAssets iopts of
@@ -179,18 +177,10 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
           MultiAssetEnable -> insertMaTxMint cache Nothing txId $ Generic.txMint tx
           MultiAssetPolicies whitelist -> insertMaTxMint cache (Just whitelist) txId $ Generic.txMint tx
 
-      when (isPlutusEnabled $ ioPlutus iopts) $
-        mapM_ (lift . insertScript syncEnv txId) $
-          Generic.txScripts tx
-
-      when (isPlutusEnabled $ ioPlutus iopts) $
-        mapM_ (insertExtraKeyWitness txId) $
-          Generic.txExtraKeyWitnesses tx
-
       when (ioGov iopts) $ do
-        mapM_ (insertGovActionProposal syncEnv blkId txId (getGovExpiresAt applyResult epochNo) (getCommittee applyResult)) $ zip [0 ..] (Generic.txProposalProcedure tx)
+        mapM_ (insertGovActionProposal syncEnv blkId txId (getGovExpiresAt applyResult epochNo) (apCommittee applyResult)) $ zip [0 ..] (Generic.txProposalProcedure tx)
         -- TODO: cmdv SHELLEY
-        mapM_ (insertVotingProcedures syncEnv txId) (Generic.txVotingProcedure tx)
+        mapM_ (insertVotingProcedures syncEnv txId (Generic.txProposalProcedure tx)) (Generic.txVotingProcedure tx)
 
       let !txIns = map (prepareTxIn txId redeemers) resolvedInputs
       pure (grouped <> BlockGroupedData txIns txOutsGrouped txMetadata maTxMint fees outSum)
@@ -213,9 +203,8 @@ insertTxOut ::
   ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe (ExtendedTxOut, [MissingMaTxOut]))
 insertTxOut syncEnv cache iopts (txId, txHash) (Generic.TxOut index addr value maMap mScript dt) =
   case ioShelley iopts of
-    ShelleyStakeAddrs _ -> do
-      p <- liftIO $ shelleyStkAddrWhitelistCheckWithAddr syncEnv addr
-      if p
+    ShelleyStakeAddrs _ ->
+      if shelleyStkAddrWhitelistCheckWithAddr syncEnv addr
         then plutusCheck
         else pure Nothing
     _other -> plutusCheck
@@ -230,7 +219,9 @@ insertTxOut syncEnv cache iopts (txId, txHash) (Generic.TxOut index addr value m
       ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe (ExtendedTxOut, [MissingMaTxOut]))
     buildExtendedTxOutPart1 = do
       mDatumId <- Generic.whenInlineDatum dt $ insertDatum syncEnv cache txId
-      mScriptId <- whenMaybe mScript $ lift . insertScript syncEnv txId
+      mScriptId <- case mScript of
+        Just script -> lift $ insertScript syncEnv txId script
+        Nothing -> pure Nothing
       buildExtendedTxOutPart2 mDatumId mScriptId
 
     buildExtendedTxOutPart2 ::
@@ -398,9 +389,8 @@ insertCollateralTxOut ::
   Generic.TxOut ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertCollateralTxOut syncEnv cache (txId, _txHash) txout@(Generic.TxOut index addr value maMap mScript dt) = do
-  p <- liftIO $ shelleyStkAddrWhitelistCheckWithAddr syncEnv addr
   -- check if shelley stake address is in the whitelist
-  when p $ do
+  when (shelleyStkAddrWhitelistCheckWithAddr syncEnv addr) $ do
     -- check plutus script hash is in the whitelist
     if isPlutusScriptHashesInWhitelist syncEnv [txout]
       then insertColTxOutPart1
@@ -408,7 +398,9 @@ insertCollateralTxOut syncEnv cache (txId, _txHash) txout@(Generic.TxOut index a
   where
     insertColTxOutPart1 = do
       mDatumId <- Generic.whenInlineDatum dt $ insertDatum syncEnv cache txId
-      mScriptId <- whenMaybe mScript $ lift . insertScript syncEnv txId
+      mScriptId <- case mScript of
+        Just script -> lift $ insertScript syncEnv txId script
+        Nothing -> pure Nothing
       insertColTxOutPart2 mDatumId mScriptId
       pure ()
 

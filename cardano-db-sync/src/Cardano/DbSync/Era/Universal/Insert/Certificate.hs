@@ -33,7 +33,7 @@ import Cardano.DbSync.Cache (
  )
 import Cardano.DbSync.Era.Conway.Insert.GovAction (
 import Cardano.DbSync.Cache.Types (CacheStatus (..), CacheUpdateAction (..))
-import Cardano.DbSync.Config.Types (isShelleyEnabled)
+import Cardano.DbSync.Config.Types (isShelleyModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Universal.Insert.GovAction (
   insertCommitteeHash,
@@ -84,20 +84,20 @@ insertCertificate ::
 insertCertificate syncEnv isMember mDeposits blkId txId epochNo slotNo redeemers (Generic.TxCertificate ridx idx cert) =
   case cert of
     Left (ShelleyTxCertDelegCert deleg) ->
-      when (isShelleyNotDisabled $ ioShelley iopts) $ insertDelegCert syncEnv network txId idx mRedeemerId epochNo slotNo deleg
+      when (isShelleyModeActive $ ioShelley iopts) $ insertDelegCert syncEnv network txId idx mRedeemerId epochNo slotNo deleg
     Left (ShelleyTxCertPool pool) ->
-      when (isShelleyNotDisabled $ ioShelley iopts) $ insertPoolCert syncEnv cache isMember network epochNo blkId txId idx pool
+      when (isShelleyModeActive $ ioShelley iopts) $ insertPoolCert syncEnv cache isMember network epochNo blkId txId idx pool
     Left (ShelleyTxCertMir mir) ->
-      when (isShelleyNotDisabled $ ioShelley iopts) $ insertMirCert syncEnv network txId idx mir
+      when (isShelleyModeActive $ ioShelley iopts) $ insertMirCert syncEnv network txId idx mir
     Left (ShelleyTxCertGenesisDeleg _gen) ->
-      when (isShelleyNotDisabled $ ioShelley iopts) $
+      when (isShelleyModeActive $ ioShelley iopts) $
         liftIO $
           logWarning tracer "insertCertificate: Unhandled DCertGenesis certificate"
     Right (ConwayTxCertDeleg deleg) ->
-      when (isShelleyNotDisabled $ ioShelley iopts) $
+      when (isShelleyModeActive $ ioShelley iopts) $
         insertConwayDelegCert syncEnv mDeposits txId idx mRedeemerId epochNo slotNo deleg
     Right (ConwayTxCertPool pool) ->
-      when (isShelleyNotDisabled $ ioShelley iopts) $ insertPoolCert syncEnv cache isMember network epochNo blkId txId idx pool
+      when (isShelleyModeActive $ ioShelley iopts) $ insertPoolCert syncEnv cache isMember network epochNo blkId txId idx pool
     Right (ConwayTxCertGov c) ->
       when (ioGov iopts) $ case c of
         ConwayRegDRep cred coin anchor ->
@@ -149,28 +149,28 @@ insertConwayDelegCert ::
 insertConwayDelegCert syncEnv mDeposits txId idx mRedeemerId epochNo slotNo dCert =
   case dCert of
     ConwayRegCert cred _dep ->
-      when (isShelleyNotDisabled $ ioShelley iopts) $
+      when (isShelleyModeActive $ ioShelley iopts) $
         insertStakeRegistration syncEnv epochNo txId idx $
           Generic.annotateStakingCred network cred
     ConwayUnRegCert cred _dep ->
-      when (isShelleyNotDisabled $ ioShelley iopts) $
+      when (isShelleyModeActive $ ioShelley iopts) $
         insertStakeDeregistration syncEnv network epochNo txId idx mRedeemerId cred
     ConwayDelegCert cred delegatee -> insertDeleg cred delegatee
     ConwayRegDelegCert cred delegatee _dep -> do
-      when (isShelleyNotDisabled $ ioShelley iopts) $
+      when (isShelleyModeActive $ ioShelley iopts) $
         insertStakeRegistration syncEnv epochNo txId idx $
           Generic.annotateStakingCred network cred
       insertDeleg cred delegatee
   where
     insertDeleg cred = \case
       DelegStake poolkh ->
-        when (isShelleyNotDisabled $ ioShelley iopts) $
+        when (isShelleyModeActive $ ioShelley iopts) $
           insertDelegation syncEnv cache network epochNo slotNo txId idx mRedeemerId cred poolkh
       DelegVote drep ->
         when (ioGov iopts) $
           insertDelegationVote syncEnv network txId idx cred drep
       DelegStakeVote poolkh drep -> do
-        when (isShelleyNotDisabled $ ioShelley iopts) $
+        when (isShelleyModeActive $ ioShelley iopts) $
           insertDelegation syncEnv cache network epochNo slotNo txId idx mRedeemerId cred poolkh
         when (ioGov iopts) $
           insertDelegationVote syncEnv network txId idx cred drep

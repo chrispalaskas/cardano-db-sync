@@ -29,7 +29,7 @@ import Cardano.DbSync.Era.Universal.Insert.Grouped
 import Cardano.DbSync.Era.Util (safeDecodeToJson)
 import Cardano.DbSync.Error
 import Cardano.DbSync.Util
-import Cardano.DbSync.Util.Whitelist (shelleyStakeAddrWhitelistCheck)
+import Cardano.DbSync.Util.Whitelist (isSimplePlutusScriptHashInWhitelist, shelleyStakeAddrWhitelistCheck)
 import qualified Cardano.Ledger.Address as Ledger
 import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Ledger.Coin (Coin (..))
@@ -206,22 +206,27 @@ insertScript ::
   SyncEnv ->
   DB.TxId ->
   Generic.TxScript ->
-  ReaderT SqlBackend m DB.ScriptId
-insertScript syncEnv txId script = do
-  mScriptId <- DB.queryScript $ Generic.txScriptHash script
-  case mScriptId of
-    Just scriptId -> pure scriptId
-    Nothing -> do
-      json <- scriptConvert script
-      DB.insertScript $
-        DB.Script
-          { DB.scriptTxId = txId
-          , DB.scriptHash = Generic.txScriptHash script
-          , DB.scriptType = Generic.txScriptType script
-          , DB.scriptSerialisedSize = Generic.txScriptPlutusSize script
-          , DB.scriptJson = json
-          , DB.scriptBytes = Generic.txScriptCBOR script
-          }
+  ReaderT SqlBackend m (Maybe DB.ScriptId)
+insertScript syncEnv txId script =
+  if isSimplePlutusScriptHashInWhitelist syncEnv $ Generic.txScriptHash script
+    then do
+      mScriptId <- DB.queryScript $ Generic.txScriptHash script
+      case mScriptId of
+        Just scriptId -> pure $ Just scriptId
+        Nothing -> do
+          json <- scriptConvert script
+          mInScript <-
+            DB.insertScript $
+              DB.Script
+                { DB.scriptTxId = txId
+                , DB.scriptHash = Generic.txScriptHash script
+                , DB.scriptType = Generic.txScriptType script
+                , DB.scriptSerialisedSize = Generic.txScriptPlutusSize script
+                , DB.scriptJson = json
+                , DB.scriptBytes = Generic.txScriptCBOR script
+                }
+          pure $ Just mInScript
+    else pure Nothing
   where
     scriptConvert :: (MonadIO m) => Generic.TxScript -> m (Maybe Text)
     scriptConvert s =

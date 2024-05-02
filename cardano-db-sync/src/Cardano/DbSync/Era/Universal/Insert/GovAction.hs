@@ -68,6 +68,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text.Encoding as Text
 import Database.Persist.Sql (SqlBackend)
 import Ouroboros.Consensus.Cardano.Block (StandardConway, StandardCrypto)
+import Prelude (zip3)
 
 insertGovActionProposal ::
   forall m.
@@ -286,48 +287,51 @@ insertVotingProcedures ::
   (MonadIO m, MonadBaseControl IO m) =>
   SyncEnv ->
   DB.TxId ->
+  [ProposalProcedure StandardConway] ->
   (Voter StandardCrypto, [(GovActionId StandardCrypto, VotingProcedure StandardConway)]) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertVotingProcedures syncEnv txId (voter, actions) =
-  mapM_ (insertVotingProcedure syncEnv txId voter) (zip [0 ..] actions)
+insertVotingProcedures syncEnv txId proposalPs (voter, actions) =
+  mapM_ (insertVotingProcedure syncEnv txId voter) (zip3 [0 ..] actions proposalPs)
 
 insertVotingProcedure ::
   (MonadIO m, MonadBaseControl IO m) =>
   SyncEnv ->
   DB.TxId ->
   Voter StandardCrypto ->
-  (Word16, (GovActionId StandardCrypto, VotingProcedure StandardConway)) ->
+  (Word16, (GovActionId StandardCrypto, VotingProcedure StandardConway), ProposalProcedure StandardConway) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertVotingProcedure syncEnv txId voter (index, (gaId, vp)) = do
-  maybeGovActionId <- resolveGovActionProposal syncEnv gaId
-  case maybeGovActionId of
-    Nothing -> pure ()
-    Just govActionId -> do
-      votingAnchorId <- whenMaybe (strictMaybeToMaybe $ vProcAnchor vp) $ lift . insertVotingAnchor txId DB.OtherAnchor
-      (mCommitteeVoterId, mDRepVoter, mStakePoolVoter) <- case voter of
-        CommitteeVoter cred -> do
-          khId <- lift $ insertCommitteeHash cred
-          pure (Just khId, Nothing, Nothing)
-        DRepVoter cred -> do
-          drep <- lift $ insertCredDrepHash cred
-          pure (Nothing, Just drep, Nothing)
-        StakePoolVoter poolkh -> do
-          poolHashId <- lift $ queryPoolKeyOrInsert "insertVotingProcedure" syncEnv (envCache syncEnv) UpdateCache False poolkh
-          pure (Nothing, Nothing, Just poolHashId)
-      void
-        . lift
-        . DB.insertVotingProcedure
-        $ DB.VotingProcedure
-          { DB.votingProcedureTxId = txId
-          , DB.votingProcedureIndex = index
-          , DB.votingProcedureGovActionProposalId = govActionId
-          , DB.votingProcedureCommitteeVoter = mCommitteeVoterId
-          , DB.votingProcedureDrepVoter = mDRepVoter
-          , DB.votingProcedurePoolVoter = mStakePoolVoter
-          , DB.votingProcedureVoterRole = Generic.toVoterRole voter
-          , DB.votingProcedureVote = Generic.toVote $ vProcVote vp
-          , DB.votingProcedureVotingAnchorId = votingAnchorId
-          }
+insertVotingProcedure syncEnv txId voter (index, (gaId, vp), proposalP) = do
+  -- check if shelley stake address is in the whitelist
+  when (shelleyStakeAddrWhitelistCheck syncEnv $ pProcReturnAddr proposalP) $ do
+    maybeGovActionId <- resolveGovActionProposal syncEnv gaId
+    case maybeGovActionId of
+      Nothing -> pure ()
+      Just govActionId -> do
+        votingAnchorId <- whenMaybe (strictMaybeToMaybe $ vProcAnchor vp) $ lift . insertVotingAnchor txId DB.OtherAnchor
+        (mCommitteeVoterId, mDRepVoter, mStakePoolVoter) <- case voter of
+          CommitteeVoter cred -> do
+            khId <- lift $ insertCommitteeHash cred
+            pure (Just khId, Nothing, Nothing)
+          DRepVoter cred -> do
+            drep <- lift $ insertCredDrepHash cred
+            pure (Nothing, Just drep, Nothing)
+          StakePoolVoter poolkh -> do
+            poolHashId <- lift $ queryPoolKeyOrInsert "insertVotingProcedure" syncEnv (envCache syncEnv) UpdateCache False poolkh
+            pure (Nothing, Nothing, Just poolHashId)
+        void
+          . lift
+          . DB.insertVotingProcedure
+          $ DB.VotingProcedure
+            { DB.votingProcedureTxId = txId
+            , DB.votingProcedureIndex = index
+            , DB.votingProcedureGovActionProposalId = govActionId
+            , DB.votingProcedureCommitteeVoter = mCommitteeVoterId
+            , DB.votingProcedureDrepVoter = mDRepVoter
+            , DB.votingProcedurePoolVoter = mStakePoolVoter
+            , DB.votingProcedureVoterRole = Generic.toVoterRole voter
+            , DB.votingProcedureVote = Generic.toVote $ vProcVote vp
+            , DB.votingProcedureVotingAnchorId = votingAnchorId
+            }
 
 insertVotingAnchor :: (MonadIO m, MonadBaseControl IO m) => DB.BlockId -> DB.AnchorType -> Anchor StandardCrypto -> ReaderT SqlBackend m DB.VotingAnchorId
 insertVotingAnchor blockId anchorType anchor =

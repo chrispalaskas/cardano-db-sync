@@ -27,7 +27,7 @@ module Cardano.DbSync.Era.Shelley.Generic.Tx.Alonzo (
 
 import qualified Cardano.Crypto.Hash as Crypto
 import Cardano.Db (ScriptType (..))
-import Cardano.DbSync.Config.Types (PlutusConfig, isPlutusEnabled)
+import Cardano.DbSync.Config.Types (PlutusConfig, isPlutusModeActive)
 import Cardano.DbSync.Era.Shelley.Generic.Metadata
 import Cardano.DbSync.Era.Shelley.Generic.Script (fromTimelock)
 import Cardano.DbSync.Era.Shelley.Generic.ScriptData (ScriptData (..))
@@ -185,7 +185,7 @@ resolveRedeemers ::
   (TxCert era -> Cert) ->
   (RedeemerMaps, [(Word64, TxRedeemer)])
 resolveRedeemers plutusConfig mprices tx toCert =
-  if not $ isPlutusEnabled plutusConfig
+  if not $ isPlutusModeActive plutusConfig
     then (initRedeemersMaps, [])
     else
       mkRdmrAndUpdateRec (initRedeemersMaps, []) $

@@ -44,10 +44,10 @@ module Cardano.DbSync.Config.Types (
   isTxOutEnabled,
   hasLedger,
   shouldUseLedger,
-  isShelleyNotDisabled,
-  isMultiAssetEnabled,
-  isMetadataEnabled,
-  isPlutusEnabled,
+  isShelleyModeActive,
+  isMultiAssetModeActive,
+  isMetadataModeActive,
+  isPlutusModeActive,
   isTxOutBootstrap,
   isTxOutConsumed,
   isTxOutPrune,
@@ -325,25 +325,25 @@ shouldUseLedger LedgerDisable = False
 shouldUseLedger LedgerEnable = True
 shouldUseLedger LedgerIgnore = False
 
-isShelleyNotDisabled :: ShelleyInsertConfig -> Bool
-isShelleyNotDisabled ShelleyDisable = False
-isShelleyNotDisabled ShelleyEnable = True
-isShelleyNotDisabled (ShelleyStakeAddrs _) = True
+isShelleyModeActive :: ShelleyInsertConfig -> Bool
+isShelleyModeActive ShelleyDisable = False
+isShelleyModeActive ShelleyEnable = True
+isShelleyModeActive (ShelleyStakeAddrs _) = True
 
-isMultiAssetEnabled :: MultiAssetConfig -> Bool
-isMultiAssetEnabled MultiAssetDisable = False
-isMultiAssetEnabled MultiAssetEnable = True
-isMultiAssetEnabled (MultiAssetPolicies _) = True
+isMultiAssetModeActive :: MultiAssetConfig -> Bool
+isMultiAssetModeActive MultiAssetDisable = False
+isMultiAssetModeActive MultiAssetEnable = True
+isMultiAssetModeActive (MultiAssetPolicies _) = True
 
-isMetadataEnabled :: MetadataConfig -> Bool
-isMetadataEnabled MetadataDisable = False
-isMetadataEnabled MetadataEnable = True
-isMetadataEnabled (MetadataKeys _) = True
+isMetadataModeActive :: MetadataConfig -> Bool
+isMetadataModeActive MetadataDisable = False
+isMetadataModeActive MetadataEnable = True
+isMetadataModeActive (MetadataKeys _) = True
 
-isPlutusEnabled :: PlutusConfig -> Bool
-isPlutusEnabled PlutusDisable = False
-isPlutusEnabled PlutusEnable = True
-isPlutusEnabled (PlutusScripts _) = True
+isPlutusModeActive :: PlutusConfig -> Bool
+isPlutusModeActive PlutusDisable = False
+isPlutusModeActive PlutusEnable = True
+isPlutusModeActive (PlutusScripts _) = True
 
 -- -------------------------------------------------------------------------------------------------
 
@@ -463,7 +463,7 @@ instance FromJSON LedgerInsertConfig where
 instance ToJSON ShelleyInsertConfig where
   toJSON cfg =
     Aeson.object
-      [ "enable" .= isShelleyNotDisabled cfg
+      [ "enable" .= isShelleyModeActive cfg
       , "stake_addresses" .= stakeAddrs cfg
       ]
     where
@@ -485,7 +485,7 @@ instance FromJSON ShelleyInsertConfig where
 instance ToJSON MultiAssetConfig where
   toJSON cfg =
     Aeson.object
-      [ "enable" .= isMultiAssetEnabled cfg
+      [ "enable" .= isMultiAssetModeActive cfg
       , "policies" .= policies cfg
       ]
     where
@@ -507,7 +507,7 @@ instance FromJSON MultiAssetConfig where
 instance ToJSON MetadataConfig where
   toJSON cfg =
     Aeson.object
-      [ "enable" .= isMetadataEnabled cfg
+      [ "enable" .= isMetadataModeActive cfg
       , "keys" .= keys cfg
       ]
     where
@@ -528,7 +528,7 @@ instance FromJSON MetadataConfig where
 instance ToJSON PlutusConfig where
   toJSON cfg =
     Aeson.object
-      [ "enable" .= isPlutusEnabled cfg
+      [ "enable" .= isPlutusModeActive cfg
       , "script_hashes" .= scriptHashes cfg
       ]
     where

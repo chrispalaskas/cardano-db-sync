@@ -29,7 +29,7 @@ import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..))
 import Cardano.DbSync.Cache (queryOrInsertStakeAddress, queryPoolKeyOrInsert)
 import Cardano.DbSync.Cache.Types (CacheStatus, CacheUpdateAction (..))
 import Cardano.DbSync.Era.Conway.Insert.GovAction (insertCostModel, insertDrepDistr, updateEnacted)
-import Cardano.DbSync.Config.Types (isShelleyEnabled)
+import Cardano.DbSync.Config.Types (isShelleyModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Universal.Insert.Certificate (insertPots)
 import Cardano.DbSync.Era.Universal.Insert.GovAction (insertCostModel, insertDrepDistr, insertUpdateEnacted, updateExpired, updateRatified)
@@ -222,7 +222,7 @@ insertEpochStake syncEnv nw epochNo stakeChunk = do
         then
           ( do
               saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache nw saddr
-              poolId <- lift $ queryPoolKeyOrInsert "insertEpochStake" syncEnv cache UpdateCache (isShelleyNotDisabled $ ioShelley iopts) pool
+              poolId <- lift $ queryPoolKeyOrInsert "insertEpochStake" syncEnv cache UpdateCache (isShelleyModeActive $ ioShelley iopts) pool
               pure $
                 Just $
                   DB.EpochStake
@@ -285,7 +285,8 @@ insertRewards syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = do
       PoolKeyHash ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) DB.PoolHashId
     queryPool poolHash =
-      lift (queryPoolKeyOrInsert "insertRewards" syncEnv cache UpdateCache (isShelleyEnabled $ ioShelley iopts) poolHash)
+      lift (queryPoolKeyOrInsert "insertRewards" syncEnv cache UpdateCache (isShelleyModeActive $ ioShelley iopts) poolHash)
+
     iopts = getInsertOptions syncEnv
 
 insertRewardRests ::
