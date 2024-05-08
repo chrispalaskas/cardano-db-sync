@@ -259,9 +259,7 @@ fullTxStakeAddressWhitelist ioManager metadata = do
         assertEqBackoff dbSync MockQ.queryStakeDeRegCount 2 [] "Expected 1 stake deregistration"
         assertEqBackoff dbSync MockQ.queryStakeRegCount 2 [] "Expected 1 stake registration"
         assertEqBackoff dbSync MockQ.countTxOutNonNullStakeAddrIds 2 [] "Expected 1 non-null stake address id"
-    -- TODO: Cmdv: Missing tables that are currently blank:
-    -- delegation, epoch_stake, pool_owner, stake_deregistration
-    -- One's that are needed for sanchonet:
+    -- TODO: Cmdv: Missing tables checks that are currently blank in tests:
     -- delegation_vote, gov_action_proposal, instant_reward, reserve,
     -- treasury, treasury_withdrawl.
 

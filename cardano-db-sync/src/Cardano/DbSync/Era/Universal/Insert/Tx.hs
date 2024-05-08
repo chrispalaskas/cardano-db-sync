@@ -20,7 +20,7 @@ import Cardano.DbSync.Api
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..))
 import Cardano.DbSync.Cache.Types (CacheStatus (..))
 
-import Cardano.DbSync.Config.Types (MetadataConfig (..), MultiAssetConfig (..), PlutusConfig (..), ShelleyInsertConfig (..), isPlutusModeActive, isShelleyModeActive)
+import Cardano.DbSync.Config.Types (MetadataConfig (..), MultiAssetConfig (..), PlutusConfig (..), isPlutusModeActive, isShelleyModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Shelley.Generic.Metadata (TxMetadataValue (..), metadataValueToJsonNoSchema)
 import Cardano.DbSync.Era.Universal.Insert.Certificate (insertCertificate)
@@ -83,7 +83,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
   disInOut <- liftIO $ getDisableInOutState syncEnv
   -- In some txs and with specific configuration we may be able to find necessary data within the tx body.
   -- In these cases we can avoid expensive queries.
-  (resolvedInputs, fees', deposits) <- case (disInOut, mdeposits, unCoin <$> Generic.txFees tx) of
+  (resolvedInputs, resolvedFees', resolvedDeposits) <- case (disInOut, mdeposits, unCoin <$> Generic.txFees tx) of
     (True, _, _) -> pure ([], 0, unCoin <$> mdeposits)
     (_, Just deposits, Just fees) -> do
       (resolvedInputs, _) <- splitLast <$> mapM (resolveTxInputs syncEnv hasConsumed False (fst <$> groupedTxOut grouped)) (Generic.txInputs tx)
@@ -95,14 +95,14 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
         else
           let !inSum = sum $ map unDbLovelace $ catMaybes amounts
            in pure (resolvedInputs, fees, Just $ fromIntegral (inSum + withdrawalSum) - fromIntegral outSum - fromIntegral fees)
+    -- Nothing in fees means a phase 2 failure
     (_, _, Nothing) -> do
-      -- Nothing in fees means a phase 2 failure
       (resolvedInsFull, amounts) <- splitLast <$> mapM (resolveTxInputs syncEnv hasConsumed True (fst <$> groupedTxOut grouped)) (Generic.txInputs tx)
       let !inSum = sum $ map unDbLovelace $ catMaybes amounts
           !diffSum = if inSum >= outSum then inSum - outSum else 0
           !fees = maybe diffSum (fromIntegral . unCoin) (Generic.txFees tx)
       pure (resolvedInsFull, fromIntegral fees, Just 0)
-  let fees = fromIntegral fees'
+  let resolvedFees = fromIntegral resolvedFees'
   -- Insert transaction and get txId from the DB.
   !txId <-
     lift
@@ -112,8 +112,8 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
         , DB.txBlockId = blkId
         , DB.txBlockIndex = blockIndex
         , DB.txOutSum = DB.DbLovelace outSum
-        , DB.txFee = DB.DbLovelace fees
-        , DB.txDeposit = fromIntegral <$> deposits
+        , DB.txFee = DB.DbLovelace resolvedFees
+        , DB.txDeposit = fromIntegral <$> resolvedDeposits
         , DB.txSize = Generic.txSize tx
         , DB.txInvalidBefore = DbWord64 . unSlotNo <$> Generic.txInvalidBefore tx
         , DB.txInvalidHereafter = DbWord64 . unSlotNo <$> Generic.txInvalidHereafter tx
@@ -132,7 +132,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
       let !txIns = map (prepareTxIn txId Map.empty) resolvedInputs
       -- There is a custom semigroup instance for BlockGroupedData which uses addition for the values `fees` and `outSum`.
       -- Same happens bellow on last line of this function.
-      pure (grouped <> BlockGroupedData txIns txOutsGrouped [] [] fees outSum)
+      pure (grouped <> BlockGroupedData txIns txOutsGrouped [] [] resolvedFees outSum)
     else do
       -- The following operations only happen if the script passes stage 2 validation (or the tx has
       -- no script).
@@ -168,7 +168,6 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
 
       when (isShelleyModeActive $ ioShelley iopts) $ do
         mapM_ (insertWithdrawals syncEnv cache txId redeemers) $ Generic.txWithdrawals tx
-        -- TODO: cmdv SHELLEY
         mapM_ (lift . insertParamProposal blkId txId) $ Generic.txParamProposal tx
 
       maTxMint <-
@@ -179,11 +178,10 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
 
       when (ioGov iopts) $ do
         mapM_ (insertGovActionProposal syncEnv blkId txId (getGovExpiresAt applyResult epochNo) (apCommittee applyResult)) $ zip [0 ..] (Generic.txProposalProcedure tx)
-        -- TODO: cmdv SHELLEY
         mapM_ (insertVotingProcedures syncEnv txId (Generic.txProposalProcedure tx)) (Generic.txVotingProcedure tx)
 
       let !txIns = map (prepareTxIn txId redeemers) resolvedInputs
-      pure (grouped <> BlockGroupedData txIns txOutsGrouped txMetadata maTxMint fees outSum)
+      pure (grouped <> BlockGroupedData txIns txOutsGrouped txMetadata maTxMint resolvedFees outSum)
   where
     tracer = getTrace syncEnv
     cache = envCache syncEnv
@@ -202,18 +200,10 @@ insertTxOut ::
   Generic.TxOut ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe (ExtendedTxOut, [MissingMaTxOut]))
 insertTxOut syncEnv cache iopts (txId, txHash) (Generic.TxOut index addr value maMap mScript dt) =
-  case ioShelley iopts of
-    ShelleyStakeAddrs _ ->
-      if shelleyStkAddrWhitelistCheckWithAddr syncEnv addr
-        then plutusCheck
-        else pure Nothing
-    _other -> plutusCheck
+  case ioPlutus iopts of
+    PlutusDisable -> buildExtendedTxOutPart2 Nothing Nothing
+    _other -> buildExtendedTxOutPart1
   where
-    plutusCheck =
-      case ioPlutus iopts of
-        PlutusDisable -> buildExtendedTxOutPart2 Nothing Nothing
-        _other -> buildExtendedTxOutPart1
-
     buildExtendedTxOutPart1 ::
       (MonadBaseControl IO m, MonadIO m) =>
       ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe (ExtendedTxOut, [MissingMaTxOut]))
@@ -423,7 +413,6 @@ insertCollateralTxOut syncEnv cache (txId, _txHash) txout@(Generic.TxOut index a
             , DB.collateralTxOutReferenceScriptId = mScriptId
             }
       pure ()
-    -- TODO: Is there any reason to add new tables for collateral multi-assets/multi-asset-outputs
     hasScript :: Bool
     hasScript = maybe False Generic.hasCredScript (Generic.getPaymentCred addr)
 
