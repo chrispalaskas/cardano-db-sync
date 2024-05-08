@@ -45,6 +45,7 @@ module Cardano.DbSync.Config.Types (
   hasLedger,
   shouldUseLedger,
   isShelleyModeActive,
+  isShelleyWhitelistModeActive,
   isMultiAssetModeActive,
   isMetadataModeActive,
   isPlutusModeActive,
@@ -329,6 +330,10 @@ isShelleyModeActive :: ShelleyInsertConfig -> Bool
 isShelleyModeActive ShelleyDisable = False
 isShelleyModeActive ShelleyEnable = True
 isShelleyModeActive (ShelleyStakeAddrs _) = True
+
+isShelleyWhitelistModeActive :: ShelleyInsertConfig -> Bool
+isShelleyWhitelistModeActive (ShelleyStakeAddrs _) = True
+isShelleyWhitelistModeActive _other = False
 
 isMultiAssetModeActive :: MultiAssetConfig -> Bool
 isMultiAssetModeActive MultiAssetDisable = False

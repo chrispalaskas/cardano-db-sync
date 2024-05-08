@@ -86,10 +86,10 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
   (resolvedInputs, fees', deposits) <- case (disInOut, mdeposits, unCoin <$> Generic.txFees tx) of
     (True, _, _) -> pure ([], 0, unCoin <$> mdeposits)
     (_, Just deposits, Just fees) -> do
-      (resolvedInputs, _) <- splitLast <$> mapM (resolveTxInputs hasConsumed False (fst <$> groupedTxOut grouped)) (Generic.txInputs tx)
+      (resolvedInputs, _) <- splitLast <$> mapM (resolveTxInputs syncEnv hasConsumed False (fst <$> groupedTxOut grouped)) (Generic.txInputs tx)
       pure (resolvedInputs, fees, Just (unCoin deposits))
     (_, Nothing, Just fees) -> do
-      (resolvedInputs, amounts) <- splitLast <$> mapM (resolveTxInputs hasConsumed False (fst <$> groupedTxOut grouped)) (Generic.txInputs tx)
+      (resolvedInputs, amounts) <- splitLast <$> mapM (resolveTxInputs syncEnv hasConsumed False (fst <$> groupedTxOut grouped)) (Generic.txInputs tx)
       if any isNothing amounts
         then pure (resolvedInputs, fees, Nothing)
         else
@@ -97,7 +97,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
            in pure (resolvedInputs, fees, Just $ fromIntegral (inSum + withdrawalSum) - fromIntegral outSum - fromIntegral fees)
     (_, _, Nothing) -> do
       -- Nothing in fees means a phase 2 failure
-      (resolvedInsFull, amounts) <- splitLast <$> mapM (resolveTxInputs hasConsumed True (fst <$> groupedTxOut grouped)) (Generic.txInputs tx)
+      (resolvedInsFull, amounts) <- splitLast <$> mapM (resolveTxInputs syncEnv hasConsumed True (fst <$> groupedTxOut grouped)) (Generic.txInputs tx)
       let !inSum = sum $ map unDbLovelace $ catMaybes amounts
           !diffSum = if inSum >= outSum then inSum - outSum else 0
           !fees = maybe diffSum (fromIntegral . unCoin) (Generic.txFees tx)

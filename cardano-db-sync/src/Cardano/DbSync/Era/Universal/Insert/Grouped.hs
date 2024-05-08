@@ -62,6 +62,7 @@ data ExtendedTxOut = ExtendedTxOut
   { etoTxHash :: !ByteString
   , etoTxOut :: !DB.TxOut
   }
+  deriving (Show)
 
 data ExtendedTxIn = ExtendedTxIn
   { etiTxIn :: !DB.TxIn
@@ -144,12 +145,15 @@ insertReverseIndex blockId minIds =
 -- This happens the input consumes an output introduced in the same block.
 resolveTxInputs ::
   MonadIO m =>
+  SyncEnv ->
+  -- | Has the output been consumed?
   Bool ->
+  -- | Does the output need a value?
   Bool ->
   [ExtendedTxOut] ->
   Generic.TxIn ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) (Generic.TxIn, DB.TxId, Either Generic.TxIn DB.TxOutId, Maybe DbLovelace)
-resolveTxInputs hasConsumed needsValue groupedOutputs txIn =
+resolveTxInputs _syncEnv hasConsumed needsValue groupedOutputs txIn =
   liftLookupFail ("resolveTxInputs " <> textShow txIn <> " ") $ do
     qres <-
       case (hasConsumed, needsValue) of

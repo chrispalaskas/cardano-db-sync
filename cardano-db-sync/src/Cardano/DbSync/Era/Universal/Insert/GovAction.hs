@@ -295,6 +295,7 @@ insertVotingProcedures ::
   (Voter StandardCrypto, [(GovActionId StandardCrypto, VotingProcedure StandardConway)]) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertVotingProcedures syncEnv txId proposalPs (voter, actions) =
+  -- TODO: cmdv will actions & proposalPs always be the same length?
   mapM_ (insertVotingProcedure syncEnv txId voter) (zip3 [0 ..] actions proposalPs)
 
 insertVotingProcedure ::

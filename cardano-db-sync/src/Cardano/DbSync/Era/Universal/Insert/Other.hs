@@ -20,9 +20,10 @@ module Cardano.DbSync.Era.Universal.Insert.Other (
 where
 
 import qualified Cardano.Db as DB
-import Cardano.DbSync.Api.Types (SyncEnv)
+import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..), SyncOptions (..))
 import Cardano.DbSync.Cache (insertDatumAndCache, queryDatum, queryMAWithCache, queryOrInsertRewardAccount, queryOrInsertStakeAddress)
-import Cardano.DbSync.Cache.Types (CacheAction (..), CacheStatus (..))
+import Cardano.DbSync.Cache.Types (CacheStatus (..), CacheUpdateAction (..))
+import Cardano.DbSync.Config.Types (isShelleyWhitelistModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Shelley.Query (queryStakeRefPtr)
 import Cardano.DbSync.Era.Universal.Insert.Grouped
@@ -74,11 +75,14 @@ insertRedeemer syncEnv disInOut groupedOutputs txId (rix, redeemer) = do
       (MonadBaseControl IO m, MonadIO m) =>
       ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe ByteString)
     findScriptHash =
-      case (disInOut, Generic.txRedeemerScriptHash redeemer) of
-        (True, _) -> pure Nothing
-        (_, Nothing) -> pure Nothing
-        (_, Just (Right bs)) -> pure $ Just bs
-        (_, Just (Left txIn)) -> resolveScriptHash groupedOutputs txIn
+      -- If we are in shelley whitelist mode, we don't need to resolve the script hash
+      if isShelleyWhitelistModeActive $ ioShelley $ soptInsertOptions $ envOptions syncEnv
+        then pure Nothing
+        else case (disInOut, Generic.txRedeemerScriptHash redeemer) of
+          (True, _) -> pure Nothing
+          (_, Nothing) -> pure Nothing
+          (_, Just (Right bs)) -> pure $ Just bs
+          (_, Just (Left txIn)) -> resolveScriptHash groupedOutputs txIn
 
 insertRedeemerData ::
   (MonadBaseControl IO m, MonadIO m) =>
