@@ -9,16 +9,22 @@ import Cardano.DbSync.Error (shortBsBase16Encode)
 import qualified Cardano.Ledger.Address as Ledger
 import qualified Cardano.Ledger.Credential as Ledger
 import Cardano.Ledger.Crypto (StandardCrypto)
-import Cardano.Ledger.Mary.Value (PolicyID (..))
+import Cardano.Ledger.Mary.Value (MultiAsset (..), PolicyID (..))
 import Cardano.Prelude (NonEmpty)
 import Data.ByteString (ByteString)
 import Data.ByteString.Short (ShortByteString, toShort)
 import Data.Map (keys)
 
 -- check both whitelist but also checking plutus Maybes first
-plutusMultiAssetWhitelistCheck :: SyncEnv -> [Generic.TxOut] -> Bool
-plutusMultiAssetWhitelistCheck syncEnv txOuts =
-  isPlutusScriptHashesInWhitelist syncEnv txOuts || isMAPoliciesInWhitelist syncEnv txOuts
+plutusMultiAssetWhitelistCheck ::
+  SyncEnv ->
+  -- | TxMint
+  MultiAsset StandardCrypto ->
+  -- | TxOuts
+  [Generic.TxOut] ->
+  Bool
+plutusMultiAssetWhitelistCheck syncEnv txMints txOuts =
+  isPlutusScriptHashesInWhitelist syncEnv txOuts || isMAPoliciesInWhitelist syncEnv txMints txOuts
 
 isPlutusScriptHashesInWhitelist :: SyncEnv -> [Generic.TxOut] -> Bool
 isPlutusScriptHashesInWhitelist syncEnv txOuts = do
@@ -45,31 +51,43 @@ isSimplePlutusScriptHashInWhitelist :: SyncEnv -> ByteString -> Bool
 isSimplePlutusScriptHashInWhitelist syncEnv scriptHash = do
   case ioPlutus iopts of
     PlutusEnable -> True
-    PlutusDisable -> False
+    PlutusDisable -> True
     PlutusScripts plutusWhitelist -> toShort scriptHash `elem` plutusWhitelist
   where
     iopts = soptInsertOptions $ envOptions syncEnv
 
-isMAPoliciesInWhitelist :: SyncEnv -> [Generic.TxOut] -> Bool
-isMAPoliciesInWhitelist syncEnv txOuts = do
+isMAPoliciesInWhitelist ::
+  SyncEnv ->
+  -- | TxMint
+  MultiAsset StandardCrypto ->
+  -- | TxOuts
+  [Generic.TxOut] ->
+  Bool
+isMAPoliciesInWhitelist syncEnv (MultiAsset mintMap) txOuts = do
   let iopts = soptInsertOptions $ envOptions syncEnv
   case ioMultiAssets iopts of
     MultiAssetEnable -> True
-    MultiAssetDisable -> False
+    MultiAssetDisable -> True
     MultiAssetPolicies multiAssetWhitelist ->
-      or multiAssetwhitelistCheck
+      mintPoliciesCheck || txOutPoliciesCheck
       where
-        -- txOutMaValue is a Map and we want to check if any of the keys match our whitelist
-        multiAssetwhitelistCheck :: [Bool]
-        multiAssetwhitelistCheck =
-          ( \txout ->
-              any (checkMAValueMap multiAssetWhitelist) (keys $ Generic.txOutMaValue txout)
-          )
-            <$> txOuts
+        mintPoliciesCheck :: Bool
+        mintPoliciesCheck = any (checkMAValueMap multiAssetWhitelist) mintPolicies
+
+        txOutPoliciesCheck :: Bool
+        txOutPoliciesCheck =
+          any
+            ( \txout ->
+                any (checkMAValueMap multiAssetWhitelist) (keys $ Generic.txOutMaValue txout)
+            )
+            txOuts
 
         checkMAValueMap :: NonEmpty ShortByteString -> PolicyID StandardCrypto -> Bool
         checkMAValueMap maWhitelist policyId =
           toShort (Generic.unScriptHash (policyID policyId)) `elem` maWhitelist
+
+        mintPolicies :: [PolicyID StandardCrypto]
+        mintPolicies = keys mintMap
 
 shelleyStkAddrWhitelistCheckWithAddr ::
   SyncEnv ->

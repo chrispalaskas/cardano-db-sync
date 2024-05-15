@@ -427,9 +427,11 @@ Be mindfull that whitelisting policies will omit data that does not match whitel
 | table name            |
 | :-------------------- |
 | datum                 |
+| ma_tx_mint            |
+| ma_tx_out             |
+| multi_assets          |
 | script                |
 | tx_out                |
-| multi_assets          |
 
 #### Example
 

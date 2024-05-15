@@ -11,7 +11,8 @@
 module Cardano.DbSync.Era.Universal.Insert.Tx (
   insertTx,
   insertTxOut,
-) where
+)
+where
 
 import Cardano.BM.Trace (Trace)
 import Cardano.Db (DbLovelace (..), DbWord64 (..))
@@ -19,7 +20,6 @@ import qualified Cardano.Db as DB
 import Cardano.DbSync.Api
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..))
 import Cardano.DbSync.Cache.Types (CacheStatus (..))
-
 import Cardano.DbSync.Config.Types (MetadataConfig (..), MultiAssetConfig (..), PlutusConfig (..), isPlutusModeActive, isShelleyModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Shelley.Generic.Metadata (TxMetadataValue (..), metadataValueToJsonNoSchema)
@@ -124,8 +124,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
   if not (Generic.txValidContract tx)
     then do
       !txOutsGrouped <- do
-        let txOuts = Generic.txOutputs tx
-        if plutusMultiAssetWhitelistCheck syncEnv txOuts
+        if plutusMultiAssetWhitelistCheck syncEnv txMints txOuts
           then mapMaybeM (insertTxOut syncEnv cache iopts (txId, txHash)) txOuts
           else pure mempty
 
@@ -137,8 +136,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
       -- The following operations only happen if the script passes stage 2 validation (or the tx has
       -- no script).
       !txOutsGrouped <- do
-        let txOuts = Generic.txOutputs tx
-        if plutusMultiAssetWhitelistCheck syncEnv txOuts
+        if plutusMultiAssetWhitelistCheck syncEnv txMints txOuts
           then mapMaybeM (insertTxOut syncEnv cache iopts (txId, txHash)) txOuts
           else pure mempty
 
@@ -183,6 +181,8 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
       let !txIns = map (prepareTxIn txId redeemers) resolvedInputs
       pure (grouped <> BlockGroupedData txIns txOutsGrouped txMetadata maTxMint resolvedFees outSum)
   where
+    txOuts = Generic.txOutputs tx
+    txMints = Generic.txMint tx
     tracer = getTrace syncEnv
     cache = envCache syncEnv
     iopts = getInsertOptions syncEnv
