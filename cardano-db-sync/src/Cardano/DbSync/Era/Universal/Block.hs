@@ -142,7 +142,7 @@ insertBlockUniversal syncEnv shouldLog withinTwoMins withinHalfHour blk details 
           ]
 
     whenStrictJust (apNewEpoch applyResult) $ \newEpoch -> do
-      insertOnNewEpoch tracer iopts blkId (Generic.blkSlotNo blk) epochNo newEpoch
+      insertOnNewEpoch syncEnv blkId (Generic.blkSlotNo blk) epochNo newEpoch
 
     insertStakeSlice syncEnv $ apStakeSlice applyResult
 

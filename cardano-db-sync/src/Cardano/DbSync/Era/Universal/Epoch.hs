@@ -62,14 +62,12 @@ import Database.Persist.Sql (SqlBackend)
 --------------------------------------------------------------------------------------------
 insertOnNewEpoch ::
   (MonadBaseControl IO m, MonadIO m) =>
-  Trace IO Text ->
-  InsertOptions ->
   DB.BlockId ->
   SlotNo ->
   EpochNo ->
   Generic.NewEpoch ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertOnNewEpoch tracer iopts blkId slotNo epochNo newEpoch = do
+insertOnNewEpoch syncEnv blkId slotNo epochNo newEpoch = do
   whenStrictJust (Generic.euProtoParams epochUpdate) $ \params ->
     lift $ insertEpochParam tracer blkId epochNo params (Generic.euNonce epochUpdate)
   whenStrictJust (Generic.neAdaPots newEpoch) $ \pots ->
@@ -84,7 +82,9 @@ insertOnNewEpoch tracer iopts blkId slotNo epochNo newEpoch = do
       insertUpdateEnacted tracer blkId epochNo enactedSt
   where
     epochUpdate :: Generic.EpochUpdate
-    epochUpdate = Generic.neEpochUpdate newEpoch
+    epochUpdate = Generic.neEpochUpdate newEpoc
+    tracer = getTrace syncEnv
+    iopts = getInsertOptions syncEnv
 
 insertEpochParam ::
   (MonadBaseControl IO m, MonadIO m) =>
