@@ -28,10 +28,10 @@ module Cardano.DbSync.Era.Universal.Insert.GovAction (
 )
 where
 
-import Cardano.BM.Trace (Trace, logWarning)
 import qualified Cardano.Crypto as Crypto
 import Cardano.Db (DbWord64 (..))
 import qualified Cardano.Db as DB
+import Cardano.DbSync.Api.Types (SyncEnv (..))
 import Cardano.DbSync.Cache (queryOrInsertRewardAccount, queryPoolKeyOrInsert)
 import Cardano.DbSync.Cache.Types (CacheAction (..), CacheStatus (..))
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
@@ -42,6 +42,7 @@ import Cardano.DbSync.Error
 import Cardano.DbSync.Ledger.Types
 import Cardano.DbSync.Util
 import Cardano.DbSync.Util.Bech32 (serialiseDrepToBech32)
+import qualified Cardano.Ledger.Address as Ledger
 import Cardano.Ledger.BaseTypes
 import qualified Cardano.Ledger.BaseTypes as Ledger
 import Cardano.Ledger.CertState (DRep (..))
@@ -69,8 +70,7 @@ import Ouroboros.Consensus.Cardano.Block (StandardConway, StandardCrypto)
 insertGovActionProposal ::
   forall m.
   (MonadIO m, MonadBaseControl IO m) =>
-  Trace IO Text ->
-  CacheStatus ->
+  SyncEnv ->
   DB.BlockId ->
   DB.TxId ->
   Maybe EpochNo ->
@@ -114,6 +114,7 @@ insertGovActionProposal trce cache blkId txId govExpiresAt mmCommittee (index, p
     NewConstitution _ constitution -> lift $ void $ insertConstitution blkId (Just govActionProposalId) constitution
     _ -> pure ()
   where
+    cache = envCache syncEnv
     mprevGovAction :: Maybe (GovActionId StandardCrypto) = case pProcGovAction pp of
       ParameterChange prv _ _ -> unGovPurposeId <$> strictMaybeToMaybe prv
       HardForkInitiation prv _ -> unGovPurposeId <$> strictMaybeToMaybe prv
@@ -122,15 +123,22 @@ insertGovActionProposal trce cache blkId txId govExpiresAt mmCommittee (index, p
       NewConstitution prv _ -> unGovPurposeId <$> strictMaybeToMaybe prv
       _ -> Nothing
 
+    insertTreasuryWithdrawal ::
+      DB.GovActionProposalId ->
+      (Ledger.RewardAcnt StandardCrypto, Coin) ->
+      ReaderT SqlBackend m (Maybe DB.TreasuryWithdrawalId)
     insertTreasuryWithdrawal gaId (rwdAcc, coin) = do
-      addrId <-
-        queryOrInsertRewardAccount trce cache UpdateCache rwdAcc
-      DB.insertTreasuryWithdrawal $
-        DB.TreasuryWithdrawal
-          { DB.treasuryWithdrawalGovActionProposalId = gaId
-          , DB.treasuryWithdrawalStakeAddressId = addrId
-          , DB.treasuryWithdrawalAmount = Generic.coinToDbLovelace coin
-          }
+      mAddrId <- queryOrInsertRewardAccount syncEnv cache UpdateCache rwdAcc
+      case mAddrId of
+        Nothing -> pure Nothing
+        Just addrId ->
+          Just <$> do
+            DB.insertTreasuryWithdrawal $
+              DB.TreasuryWithdrawal
+                { DB.treasuryWithdrawalGovActionProposalId = gaId
+                , DB.treasuryWithdrawalStakeAddressId = addrId
+                , DB.treasuryWithdrawalAmount = Generic.coinToDbLovelace coin
+                }
 
     insertNewCommittee ::
       Maybe DB.GovActionProposalId ->
@@ -270,25 +278,21 @@ insertConstitution blockId mgapId constitution = do
 --------------------------------------------------------------------------------------
 insertVotingProcedures ::
   (MonadIO m, MonadBaseControl IO m) =>
-  Trace IO Text ->
-  CacheStatus ->
-  DB.BlockId ->
+  SyncEnv ->
   DB.TxId ->
   (Voter StandardCrypto, [(GovActionId StandardCrypto, VotingProcedure StandardConway)]) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertVotingProcedures trce cache blkId txId (voter, actions) =
-  mapM_ (insertVotingProcedure trce cache blkId txId voter) (zip [0 ..] actions)
+insertVotingProcedures syncEnv txId (voter, actions) =
+  mapM_ (insertVotingProcedure syncEnv txId voter) (zip [0 ..] actions)
 
 insertVotingProcedure ::
   (MonadIO m, MonadBaseControl IO m) =>
-  Trace IO Text ->
-  CacheStatus ->
-  DB.BlockId ->
+  SyncEnv ->
   DB.TxId ->
   Voter StandardCrypto ->
   (Word16, (GovActionId StandardCrypto, VotingProcedure StandardConway)) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertVotingProcedure trce cache blkId txId voter (index, (gaId, vp)) = do
+insertVotingProcedure syncEnv txId voter (index, (gaId, vp)) = do
   govActionId <- resolveGovActionProposal gaId
   votingAnchorId <- whenMaybe (strictMaybeToMaybe $ vProcAnchor vp) $ lift . insertVotingAnchor blkId DB.OtherAnchor
   (mCommitteeVoterId, mDRepVoter, mStakePoolVoter) <- case voter of
@@ -299,7 +303,7 @@ insertVotingProcedure trce cache blkId txId voter (index, (gaId, vp)) = do
       drep <- lift $ insertCredDrepHash cred
       pure (Nothing, Just drep, Nothing)
     StakePoolVoter poolkh -> do
-      poolHashId <- lift $ queryPoolKeyOrInsert "insertVotingProcedure" trce cache UpdateCache False poolkh
+      poolHashId <- lift $ queryPoolKeyOrInsert "insertVotingProcedure" syncEnv (envCache syncEnv) UpdateCache False poolkh
       pure (Nothing, Nothing, Just poolHashId)
   void
     . lift

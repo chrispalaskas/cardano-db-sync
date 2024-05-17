@@ -11,23 +11,26 @@ module Cardano.DbSync.Cache (
   insertBlockAndCache,
   insertDatumAndCache,
   insertPoolKeyWithCache,
+  insertStakeAddress,
   queryDatum,
   queryMAWithCache,
+  queryOrInsertRewardAccount,
+  queryOrInsertStakeAddress,
   queryPoolKeyOrInsert,
   queryPoolKeyWithCache,
   queryPrevBlockWithCache,
-  queryOrInsertStakeAddress,
-  queryOrInsertRewardAccount,
-  insertStakeAddress,
   queryStakeAddrWithCache,
   rollbackCache,
 
   -- * CacheStatistics
   getCacheStatistics,
-) where
+)
+where
 
 import Cardano.BM.Trace
 import qualified Cardano.Db as DB
+import Cardano.DbSync.Api (getTrace)
+import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..), SyncOptions (..))
 import Cardano.DbSync.Cache.Epoch (rollbackMapEpochInCache)
 import qualified Cardano.DbSync.Cache.LRU as LRU
 import Cardano.DbSync.Cache.Types (CacheAction (..), CacheInternal (..), CacheStatistics (..), CacheStatus (..), initCacheStatistics, isCacheActionUpdate)
@@ -36,6 +39,7 @@ import Cardano.DbSync.Era.Shelley.Query
 import Cardano.DbSync.Era.Util
 import Cardano.DbSync.Error
 import Cardano.DbSync.Types
+import Cardano.DbSync.Util.Whitelist (shelleyInsertWhitelistCheck)
 import qualified Cardano.Ledger.Address as Ledger
 import Cardano.Ledger.BaseTypes (Network)
 import Cardano.Ledger.Mary.Value
@@ -68,8 +72,8 @@ import Ouroboros.Consensus.Cardano.Block (StandardCrypto)
 -- a different id.
 -- NOTE: Other tables are not cleaned up since they are not rollbacked.
 rollbackCache :: MonadIO m => CacheStatus -> DB.BlockId -> ReaderT SqlBackend m ()
-rollbackCache NoCache _ = pure ()
-rollbackCache (ActiveCache cache) blockId = do
+rollbackCache UninitiatedCache _ = pure ()
+rollbackCache (Cache cache) blockId = do
   liftIO $ do
     atomically $ writeTVar (cPrevBlock cache) Nothing
     atomically $ modifyTVar (cDatum cache) LRU.cleanup
@@ -83,44 +87,61 @@ getCacheStatistics cs =
 
 queryOrInsertRewardAccount ::
   (MonadBaseControl IO m, MonadIO m) =>
-  Trace IO Text ->
+  SyncEnv ->
   CacheStatus ->
   CacheAction ->
   Ledger.RewardAccount StandardCrypto ->
-  ReaderT SqlBackend m DB.StakeAddressId
-queryOrInsertRewardAccount trce cache cacheUA rewardAddr = do
-  eiAddrId <- queryRewardAccountWithCacheRetBs trce cache cacheUA rewardAddr
-  case eiAddrId of
-    Left (_err, bs) -> insertStakeAddress rewardAddr (Just bs)
-    Right addrId -> pure addrId
+  ReaderT SqlBackend m (Maybe DB.StakeAddressId)
+queryOrInsertRewardAccount syncEnv cache cacheUA rewardAddr = do
+  -- check if the stake address is in the whitelist
+  if shelleyInsertWhitelistCheck (ioShelley iopts) laBs
+    then do
+      eiAddrId <- queryRewardAccountWithCacheRetBs cache cacheUA rewardAddr
+      case eiAddrId of
+        Left (_err, bs) -> insertStakeAddress syncEnv rewardAddr (Just bs)
+        Right addrId -> pure $ Just addrId
+    else pure Nothing
+  where
+    nw = Ledger.getRwdNetwork rewardAddr
+    cred = Ledger.getRwdCred rewardAddr
+    !laBs = Ledger.serialiseRewardAcnt (Ledger.RewardAcnt nw cred)
+    iopts = soptInsertOptions $ envOptions syncEnv
 
 queryOrInsertStakeAddress ::
   (MonadBaseControl IO m, MonadIO m) =>
-  Trace IO Text ->
+  SyncEnv ->
   CacheStatus ->
   CacheAction ->
   Network ->
   StakeCred ->
-  ReaderT SqlBackend m DB.StakeAddressId
-queryOrInsertStakeAddress trce cache cacheUA nw cred =
-  queryOrInsertRewardAccount trce cache cacheUA $ Ledger.RewardAccount nw cred
+  ReaderT SqlBackend m (Maybe DB.StakeAddressId)
+queryOrInsertStakeAddress syncEnv cache cacheUA nw cred =
+  queryOrInsertRewardAccount syncEnv cache cacheUA $ Ledger.RewardAccount nw cred
 
 -- If the address already exists in the table, it will not be inserted again (due to
 -- the uniqueness constraint) but the function will return the 'StakeAddressId'.
 insertStakeAddress ::
   (MonadBaseControl IO m, MonadIO m) =>
+  SyncEnv ->
   Ledger.RewardAccount StandardCrypto ->
   Maybe ByteString ->
-  ReaderT SqlBackend m DB.StakeAddressId
-insertStakeAddress rewardAddr stakeCredBs = do
-  DB.insertStakeAddress $
-    DB.StakeAddress
-      { DB.stakeAddressHashRaw = addrBs
-      , DB.stakeAddressView = Generic.renderRewardAccount rewardAddr
-      , DB.stakeAddressScriptHash = Generic.getCredentialScriptHash $ Ledger.raCredential rewardAddr
-      }
+  ReaderT SqlBackend m (Maybe DB.StakeAddressId)
+insertStakeAddress syncEnv rewardAddr stakeCredBs =
+  -- check if the address is in the whitelist
+  if shelleyInsertWhitelistCheck ioptsShelley addrBs
+    then do
+      stakeAddrsId <-
+        DB.insertStakeAddress $
+          DB.StakeAddress
+            { DB.stakeAddressHashRaw = addrBs
+            , DB.stakeAddressView = Generic.renderRewardAcnt rewardAddr
+            , DB.stakeAddressScriptHash = Generic.getCredentialScriptHash $ Ledger.getRwdCred rewardAddr
+            }
+      pure $ Just stakeAddrsId
+    else pure Nothing
   where
-    addrBs = fromMaybe (Ledger.serialiseRewardAccount rewardAddr) stakeCredBs
+    addrBs = fromMaybe (Ledger.serialiseRewardAcnt rewardAddr) stakeCredBs
+    ioptsShelley = ioShelley . soptInsertOptions $ envOptions syncEnv
 
 queryRewardAccountWithCacheRetBs ::
   forall m.
@@ -154,8 +175,7 @@ queryStakeAddrWithCacheRetBs ::
   Network ->
   StakeCred ->
   ReaderT SqlBackend m (Either (DB.LookupFail, ByteString) DB.StakeAddressId)
-queryStakeAddrWithCacheRetBs trce cache cacheUA nw cred = do
-  let !bs = Ledger.serialiseRewardAccount (Ledger.RewardAccount nw cred)
+queryStakeAddrWithCacheRetBs cache cacheUA nw cred = do
   case cache of
     NoCache -> do
       mapLeft (,bs) <$> queryStakeAddress bs
@@ -198,11 +218,12 @@ queryStakeAddrWithCacheRetBs trce cache cacheUA nw cred = do
 
 queryPoolKeyWithCache ::
   MonadIO m =>
+  SyncEnv ->
   CacheStatus ->
   CacheAction ->
   PoolKeyHash ->
   ReaderT SqlBackend m (Either DB.LookupFail DB.PoolHashId)
-queryPoolKeyWithCache cache cacheUA hsh =
+queryPoolKeyWithCache syncEnv cache cacheUA hsh =
   case cache of
     NoCache -> do
       mPhId <- queryPoolHashId (Generic.unKeyHashRaw hsh)
@@ -278,14 +299,14 @@ insertPoolKeyWithCache cache cacheUA pHash =
 queryPoolKeyOrInsert ::
   (MonadBaseControl IO m, MonadIO m) =>
   Text ->
-  Trace IO Text ->
+  SyncEnv ->
   CacheStatus ->
   CacheAction ->
   Bool ->
   PoolKeyHash ->
   ReaderT SqlBackend m DB.PoolHashId
-queryPoolKeyOrInsert txt trce cache cacheUA logsWarning hsh = do
-  pk <- queryPoolKeyWithCache cache cacheUA hsh
+queryPoolKeyOrInsert txt syncEnv cache cacheUA logsWarning hsh = do
+  pk <- queryPoolKeyWithCache syncEnv cache cacheUA hsh
   case pk of
     Right poolHashId -> pure poolHashId
     Left err -> do
@@ -304,8 +325,8 @@ queryPoolKeyOrInsert txt trce cache cacheUA logsWarning hsh = do
       insertPoolKeyWithCache cache cacheUA hsh
 
 queryMAWithCache ::
-  MonadIO m =>
-  CacheStatus ->
+  (MonadIO m) =>
+  Cache ->
   PolicyID StandardCrypto ->
   AssetName ->
   ReaderT SqlBackend m (Either (ByteString, ByteString) DB.MultiAssetId)
@@ -329,11 +350,14 @@ queryMAWithCache cache policyId asset =
           let !assetNameBs = Generic.unAssetName asset
           maId <- maybe (Left (policyBs, assetNameBs)) Right <$> DB.queryMultiAssetId policyBs assetNameBs
           whenRight maId $
-            liftIO . atomically . modifyTVar (cMultiAssets ci) . LRU.insert (policyId, asset)
+            liftIO
+              . atomically
+              . modifyTVar (cMultiAssets ci)
+              . LRU.insert (policyId, asset)
           pure maId
 
 queryPrevBlockWithCache ::
-  MonadIO m =>
+  (MonadIO m) =>
   Text ->
   CacheStatus ->
   ByteString ->
@@ -354,7 +378,7 @@ queryPrevBlockWithCache msg cache hsh =
         Nothing -> queryFromDb ci
   where
     queryFromDb ::
-      MonadIO m =>
+      (MonadIO m) =>
       CacheInternal ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) DB.BlockId
     queryFromDb ci = do
