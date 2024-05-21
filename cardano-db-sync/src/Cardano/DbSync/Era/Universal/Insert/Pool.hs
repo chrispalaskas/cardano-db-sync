@@ -5,6 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# OPTIONS_GHC -Wno-deprecations #-}
 
 module Cardano.DbSync.Era.Universal.Insert.Pool (
   IsPoolMember,
@@ -26,7 +27,7 @@ import Cardano.DbSync.Cache (
   queryOrInsertStakeAddress,
   queryPoolKeyOrInsert,
  )
-import Cardano.DbSync.Cache.Types (CacheStatus (..), CacheUpdateAction (..))
+import Cardano.DbSync.Cache.Types (CacheAction (..), CacheStatus (..))
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Shelley.Query
 import Cardano.DbSync.Error
@@ -152,7 +153,7 @@ insertPoolOwner ::
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertPoolOwner syncEnv cache network poolUpdateId skh =
   -- Check if the stake address is in the shelley whitelist
-  when (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAcnt network (Ledger.KeyHashObj skh)) $ do
+  when (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount network (Ledger.KeyHashObj skh)) $ do
     saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache network (Ledger.KeyHashObj skh)
     void . lift . DB.insertPoolOwner $
       DB.PoolOwner

@@ -27,8 +27,7 @@ import qualified Cardano.Db as DB
 import Cardano.DbSync.Api
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..))
 import Cardano.DbSync.Cache (queryOrInsertStakeAddress, queryPoolKeyOrInsert)
-import Cardano.DbSync.Cache.Types (CacheStatus, CacheUpdateAction (..))
-import Cardano.DbSync.Era.Conway.Insert.GovAction (insertCostModel, insertDrepDistr, updateEnacted)
+import Cardano.DbSync.Cache.Types (CacheAction (..), CacheStatus)
 import Cardano.DbSync.Config.Types (isShelleyModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Universal.Insert.Certificate (insertPots)
@@ -37,7 +36,7 @@ import Cardano.DbSync.Era.Universal.Insert.Other (toDouble)
 import Cardano.DbSync.Error
 import Cardano.DbSync.Ledger.Event
 import Cardano.DbSync.Types
-import Cardano.DbSync.Util (whenStrictJust)
+import Cardano.DbSync.Util (whenFalseEmpty, whenStrictJust)
 import Cardano.DbSync.Util.Constraint (constraintNameEpochStake, constraintNameReward)
 import Cardano.DbSync.Util.Whitelist (shelleyStakeAddrWhitelistCheck)
 import qualified Cardano.Ledger.Address as Ledger
@@ -63,6 +62,7 @@ import Database.Persist.Sql (SqlBackend)
 --------------------------------------------------------------------------------------------
 insertOnNewEpoch ::
   (MonadBaseControl IO m, MonadIO m) =>
+  SyncEnv ->
   DB.BlockId ->
   SlotNo ->
   EpochNo ->
@@ -78,12 +78,12 @@ insertOnNewEpoch syncEnv blkId slotNo epochNo newEpoch = do
     lift $ insertDrepDistr epochNo drepSnapshot
     updateRatified syncEnv epochNo (toList $ rsEnacted ratifyState)
     updateExpired syncEnv epochNo (toList $ rsExpired ratifyState)
-  whenStrictJust (Generic.neEnacted newEpoch) $ \enactedSt ->
-    when (ioGov iopts) $
-      updateEnacted syncEnv epochNo enactedSt
+  whenStrictJust (Generic.neEnacted newEpoch) $ \enactedSt -> do
+    when (ioGov iopts) $ do
+      insertUpdateEnacted syncEnv blkId epochNo enactedSt
   where
     epochUpdate :: Generic.EpochUpdate
-    epochUpdate = Generic.neEpochUpdate newEpoc
+    epochUpdate = Generic.neEpochUpdate newEpoch
     tracer = getTrace syncEnv
     iopts = getInsertOptions syncEnv
 
@@ -217,22 +217,21 @@ insertEpochStake syncEnv nw epochNo stakeChunk = do
       (StakeCred, (Shelley.Coin, PoolKeyHash)) ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe DB.EpochStake)
     mkStake cache (saddr, (coin, pool)) =
-      -- Check if the stake address is in the shelley whitelist
-      if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw saddr
-        then
-          ( do
-              saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache nw saddr
-              poolId <- lift $ queryPoolKeyOrInsert "insertEpochStake" syncEnv cache UpdateCache (isShelleyModeActive $ ioShelley iopts) pool
-              pure $
-                Just $
-                  DB.EpochStake
-                    { DB.epochStakeAddrId = saId
-                    , DB.epochStakePoolId = poolId
-                    , DB.epochStakeAmount = Generic.coinToDbLovelace coin
-                    , DB.epochStakeEpochNo = unEpochNo epochNo -- The epoch where this delegation becomes valid.
-                    }
-          )
-        else pure Nothing
+      whenFalseEmpty
+        (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw saddr)
+        Nothing
+        ( do
+            saId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache nw saddr
+            poolId <- lift $ queryPoolKeyOrInsert "insertEpochStake" syncEnv cache UpdateCache (isShelleyModeActive $ ioShelley iopts) pool
+            pure $
+              Just $
+                DB.EpochStake
+                  { DB.epochStakeAddrId = saId
+                  , DB.epochStakePoolId = poolId
+                  , DB.epochStakeAmount = Generic.coinToDbLovelace coin
+                  , DB.epochStakeEpochNo = unEpochNo epochNo -- The epoch where this delegation becomes valid.
+                  }
+        )
     iopts = getInsertOptions syncEnv
 
 insertRewards ::
@@ -255,7 +254,7 @@ insertRewards syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = do
       (MonadBaseControl IO m, MonadIO m) =>
       (StakeCred, Set Generic.Reward) ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) [DB.Reward]
-    mkRewards (saddr, rset) =
+    mkRewards (saddr, rset) = do
       -- Check if the stake address is in the shelley whitelist
       if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw saddr
         then do
@@ -308,7 +307,7 @@ insertRewardRests syncEnv nw earnedEpoch spendableEpoch cache rewardsChunk = do
       (MonadBaseControl IO m, MonadIO m) =>
       (StakeCred, Set Generic.RewardRest) ->
       ExceptT SyncNodeError (ReaderT SqlBackend m) [DB.RewardRest]
-    mkRewards (saddr, rset) =
+    mkRewards (saddr, rset) = do
       -- Check if the stake address is in the shelley whitelist
       if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw saddr
         then do

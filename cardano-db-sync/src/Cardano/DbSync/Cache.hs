@@ -71,8 +71,8 @@ import Ouroboros.Consensus.Cardano.Block (StandardCrypto)
 -- a different id.
 -- NOTE: Other tables are not cleaned up since they are not rollbacked.
 rollbackCache :: MonadIO m => CacheStatus -> DB.BlockId -> ReaderT SqlBackend m ()
-rollbackCache UninitiatedCache _ = pure ()
-rollbackCache (Cache cache) blockId = do
+rollbackCache NoCache _ = pure ()
+rollbackCache (ActiveCache cache) blockId = do
   liftIO $ do
     atomically $ writeTVar (cPrevBlock cache) Nothing
     atomically $ modifyTVar (cDatum cache) LRU.cleanup
@@ -92,7 +92,7 @@ queryOrInsertRewardAccount ::
   Ledger.RewardAccount StandardCrypto ->
   ReaderT SqlBackend m DB.StakeAddressId
 queryOrInsertRewardAccount syncEnv cache cacheNew rewardAddr = do
-  eiAddrId <- queryRewardAccountWithCacheRetBs cache cacheNew rewardAddr
+  eiAddrId <- queryRewardAccountWithCacheRetBs syncEnv cache cacheNew rewardAddr
   case eiAddrId of
     Left (_err, bs) -> insertStakeAddress syncEnv rewardAddr (Just bs)
     Right addrId -> pure addrId
@@ -130,36 +130,37 @@ insertStakeAddress _syncEnv rewardAddr stakeCredBs = do
 queryRewardAccountWithCacheRetBs ::
   forall m.
   MonadIO m =>
-  Trace IO Text ->
+  SyncEnv ->
   CacheStatus ->
   CacheAction ->
   Ledger.RewardAccount StandardCrypto ->
   ReaderT SqlBackend m (Either (DB.LookupFail, ByteString) DB.StakeAddressId)
-queryRewardAccountWithCacheRetBs trce cache cacheUA rwdAcc =
-  queryStakeAddrWithCacheRetBs trce cache cacheUA (Ledger.raNetwork rwdAcc) (Ledger.raCredential rwdAcc)
+queryRewardAccountWithCacheRetBs syncEnv cache cacheUA rwdAcc =
+  queryStakeAddrWithCacheRetBs syncEnv cache cacheUA (Ledger.raNetwork rwdAcc) (Ledger.raCredential rwdAcc)
 
 queryStakeAddrWithCache ::
   forall m.
   MonadIO m =>
-  Trace IO Text ->
+  SyncEnv ->
   CacheStatus ->
   CacheAction ->
   Network ->
   StakeCred ->
   ReaderT SqlBackend m (Either DB.LookupFail DB.StakeAddressId)
-queryStakeAddrWithCache trce cache cacheUA nw cred =
-  mapLeft fst <$> queryStakeAddrWithCacheRetBs trce cache cacheUA nw cred
+queryStakeAddrWithCache syncEnv cache cacheUA nw cred =
+  mapLeft fst <$> queryStakeAddrWithCacheRetBs syncEnv cache cacheUA nw cred
 
 queryStakeAddrWithCacheRetBs ::
   forall m.
   MonadIO m =>
-  Trace IO Text ->
+  SyncEnv ->
   CacheStatus ->
   CacheAction ->
   Network ->
   StakeCred ->
   ReaderT SqlBackend m (Either (DB.LookupFail, ByteString) DB.StakeAddressId)
-queryStakeAddrWithCacheRetBs cache cacheUA nw cred = do
+queryStakeAddrWithCacheRetBs syncEnv cache cacheUA nw cred = do
+  let !bs = Ledger.serialiseRewardAccount (Ledger.RewardAccount nw cred)
   case cache of
     NoCache -> do
       mapLeft (,bs) <$> queryStakeAddress bs
@@ -170,10 +171,10 @@ queryStakeAddrWithCacheRetBs cache cacheUA nw cred = do
       currentCache <-
         if isNewCache
           then do
-            liftIO $ logInfo trce "Stake Raw Hashes cache is new and empty. Populating with addresses from db..."
+            liftIO $ logInfo (getTrace syncEnv) "Stake Raw Hashes cache is new and empty. Populating with addresses from db..."
             queryRes <- DB.queryAddressWithReward (fromIntegral $ LRU.getCapacity prevCache)
             liftIO $ atomically $ writeTVar (cStakeRawHashes ci) $ LRU.fromList queryRes prevCache
-            liftIO $ logInfo trce "Population of cache complete."
+            liftIO $ logInfo (getTrace syncEnv) "Population of cache complete."
             liftIO $ readTVarIO (cStakeRawHashes ci)
           else pure prevCache
 
@@ -202,12 +203,11 @@ queryStakeAddrWithCacheRetBs cache cacheUA nw cred = do
 
 queryPoolKeyWithCache ::
   MonadIO m =>
-  SyncEnv ->
   CacheStatus ->
   CacheAction ->
   PoolKeyHash ->
   ReaderT SqlBackend m (Either DB.LookupFail DB.PoolHashId)
-queryPoolKeyWithCache syncEnv cache cacheUA hsh =
+queryPoolKeyWithCache cache cacheUA hsh =
   case cache of
     NoCache -> do
       mPhId <- queryPoolHashId (Generic.unKeyHashRaw hsh)
@@ -290,13 +290,13 @@ queryPoolKeyOrInsert ::
   PoolKeyHash ->
   ReaderT SqlBackend m DB.PoolHashId
 queryPoolKeyOrInsert txt syncEnv cache cacheUA logsWarning hsh = do
-  pk <- queryPoolKeyWithCache syncEnv cache cacheUA hsh
+  pk <- queryPoolKeyWithCache cache cacheUA hsh
   case pk of
     Right poolHashId -> pure poolHashId
     Left err -> do
       when logsWarning $
         liftIO $
-          logWarning trce $
+          logWarning (getTrace syncEnv) $
             mconcat
               [ "Failed with "
               , DB.textShow err
@@ -310,7 +310,7 @@ queryPoolKeyOrInsert txt syncEnv cache cacheUA logsWarning hsh = do
 
 queryMAWithCache ::
   MonadIO m =>
-  Cache ->
+  CacheStatus ->
   PolicyID StandardCrypto ->
   AssetName ->
   ReaderT SqlBackend m (Either (ByteString, ByteString) DB.MultiAssetId)

@@ -17,8 +17,8 @@ import Cardano.DbSync.Api
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..), SyncOptions (..))
 import Cardano.DbSync.Cache (insertBlockAndCache, queryPoolKeyWithCache, queryPrevBlockWithCache)
 import Cardano.DbSync.Cache.Epoch (writeEpochBlockDiffToCache)
-import Cardano.DbSync.Cache.Types (CacheStatus (..), CacheUpdateAction (..), EpochBlockDiff (..))
-import Cardano.DbSync.Config.Types (isShelleyEnabled)
+import Cardano.DbSync.Cache.Types (CacheAction (..), CacheStatus (..), EpochBlockDiff (..))
+import Cardano.DbSync.Config.Types (isShelleyModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Universal.Epoch
 import Cardano.DbSync.Era.Universal.Insert.Grouped
@@ -63,7 +63,7 @@ insertBlockUniversal syncEnv shouldLog withinTwoMins withinHalfHour blk details 
     pbid <- case Generic.blkPreviousHash blk of
       Nothing -> liftLookupFail (renderErrorMessage (Generic.blkEra blk)) DB.queryGenesis -- this is for networks that fork from Byron on epoch 0.
       Just pHash -> queryPrevBlockWithCache (renderErrorMessage (Generic.blkEra blk)) cache pHash
-    mPhid <- lift $ queryPoolKeyWithCache syncEnv UpdateCache $ coerceKeyRole $ Generic.blkSlotLeader blk
+    mPhid <- lift $ queryPoolKeyWithCache cache UpdateCache $ coerceKeyRole $ Generic.blkSlotLeader blk
     let epochNo = sdEpochNo details
 
     slid <- lift . DB.insertSlotLeader $ Generic.mkSlotLeader (isShelleyModeActive $ ioShelley iopts) (Generic.unKeyHashRaw $ Generic.blkSlotLeader blk) (eitherToMaybe mPhid)

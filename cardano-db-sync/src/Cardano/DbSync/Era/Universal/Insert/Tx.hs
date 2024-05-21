@@ -36,6 +36,7 @@ import Cardano.DbSync.Era.Universal.Insert.Other (
   insertMultiAsset,
   insertRedeemer,
   insertScript,
+  insertScriptWithWhitelist,
   insertStakeAddressRefIfMissing,
   insertWithdrawals,
  )
@@ -80,6 +81,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
   let !outSum = fromIntegral $ unCoin $ Generic.txOutSum tx
       !withdrawalSum = fromIntegral $ unCoin $ Generic.txWithdrawalSum tx
       hasConsumed = getHasConsumedOrPruneTxOut syncEnv
+
   disInOut <- liftIO $ getDisableInOutState syncEnv
   -- In some txs and with specific configuration we may be able to find necessary data within the tx body.
   -- In these cases we can avoid expensive queries.
@@ -124,7 +126,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
   if not (Generic.txValidContract tx)
     then do
       !txOutsGrouped <- do
-        if plutusMultiAssetWhitelistCheck syncEnv txMints txOuts
+        if isplutusMultiAssetInWhitelist
           then mapMaybeM (insertTxOut syncEnv cache iopts (txId, txHash)) txOuts
           else pure mempty
 
@@ -136,7 +138,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
       -- The following operations only happen if the script passes stage 2 validation (or the tx has
       -- no script).
       !txOutsGrouped <- do
-        if plutusMultiAssetWhitelistCheck syncEnv txMints txOuts
+        if isplutusMultiAssetInWhitelist
           then mapMaybeM (insertTxOut syncEnv cache iopts (txId, txHash)) txOuts
           else pure mempty
 
@@ -150,9 +152,9 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
         mapM_ (insertDatum syncEnv cache txId) (Generic.txData tx)
         mapM_ (insertCollateralTxIn tracer txId) (Generic.txCollateralInputs tx)
         mapM_ (insertReferenceTxIn tracer txId) (Generic.txReferenceInputs tx)
-        mapM_ (insertCollateralTxOut syncEnv cache (txId, txHash)) (Generic.txCollateralOutputs tx)
-        mapM_ (lift . insertScript syncEnv txId) $ Generic.txScripts tx
         mapM_ (insertExtraKeyWitness txId) $ Generic.txExtraKeyWitnesses tx
+        mapM_ (lift . insertScriptWithWhitelist syncEnv txId) $ Generic.txScripts tx
+        mapM_ (insertCollateralTxOut syncEnv cache (txId, txHash)) (Generic.txCollateralOutputs tx)
 
       txMetadata <- do
         case ioMetadata iopts of
@@ -176,7 +178,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
 
       when (ioGov iopts) $ do
         mapM_ (insertGovActionProposal syncEnv blkId txId (getGovExpiresAt applyResult epochNo) (apCommittee applyResult)) $ zip [0 ..] (Generic.txProposalProcedure tx)
-        mapM_ (insertVotingProcedures syncEnv txId (Generic.txProposalProcedure tx)) (Generic.txVotingProcedure tx)
+        mapM_ (insertVotingProcedures syncEnv blkId txId (Generic.txProposalProcedure tx)) (Generic.txVotingProcedure tx)
 
       let !txIns = map (prepareTxIn txId redeemers) resolvedInputs
       pure (grouped <> BlockGroupedData txIns txOutsGrouped txMetadata maTxMint resolvedFees outSum)
@@ -187,6 +189,7 @@ insertTx syncEnv isMember blkId epochNo slotNo applyResult blockIndex tx grouped
     cache = envCache syncEnv
     iopts = getInsertOptions syncEnv
     mDeposits = maybeFromStrict $ apDeposits applyResult
+    isplutusMultiAssetInWhitelist = plutusMultiAssetWhitelistCheck syncEnv txMints txOuts
 
 --------------------------------------------------------------------------------------
 -- INSERT TXOUT
@@ -210,7 +213,7 @@ insertTxOut syncEnv cache iopts (txId, txHash) (Generic.TxOut index addr value m
     buildExtendedTxOutPart1 = do
       mDatumId <- Generic.whenInlineDatum dt $ insertDatum syncEnv cache txId
       mScriptId <- case mScript of
-        Just script -> lift $ insertScript syncEnv txId script
+        Just script -> lift $ Just <$> insertScript syncEnv txId script
         Nothing -> pure Nothing
       buildExtendedTxOutPart2 mDatumId mScriptId
 
@@ -290,7 +293,7 @@ prepareTxMetadata syncEnv mWhitelist txId mmetadata =
     mkDbTxMetadata (key, md) = do
       let jsonbs = LBS.toStrict $ Aeson.encode (metadataValueToJsonNoSchema md)
           singleKeyCBORMetadata = serialiseTxMetadataToCbor $ Map.singleton key md
-      mjson <- safeDecodeToJson tracer "prepareTxMetadata: Column 'json' in table 'metadata' " jsonbs
+      mjson <- safeDecodeToJson syncEnv "prepareTxMetadata: Column 'json' in table 'metadata' " jsonbs
       pure $
         DB.TxMetadata
           { DB.txMetadataKey = DbWord64 key
@@ -304,7 +307,6 @@ prepareTxMetadata syncEnv mWhitelist txId mmetadata =
 --------------------------------------------------------------------------------------
 insertMaTxMint ::
   (MonadBaseControl IO m, MonadIO m) =>
-  Trace IO Text ->
   CacheStatus ->
   Maybe (NonEmpty ShortByteString) ->
   DB.TxId ->
@@ -339,7 +341,6 @@ insertMaTxMint cache mWhitelist txId (MultiAsset mintMap) =
 
 insertMaTxOuts ::
   (MonadBaseControl IO m, MonadIO m) =>
-  Trace IO Text ->
   CacheStatus ->
   Maybe (NonEmpty ShortByteString) ->
   Map (PolicyID StandardCrypto) (Map AssetName Integer) ->
@@ -374,7 +375,6 @@ insertCollateralTxOut ::
   (MonadBaseControl IO m, MonadIO m) =>
   SyncEnv ->
   CacheStatus ->
-  InsertOptions ->
   (DB.TxId, ByteString) ->
   Generic.TxOut ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
@@ -389,7 +389,7 @@ insertCollateralTxOut syncEnv cache (txId, _txHash) txout@(Generic.TxOut index a
     insertColTxOutPart1 = do
       mDatumId <- Generic.whenInlineDatum dt $ insertDatum syncEnv cache txId
       mScriptId <- case mScript of
-        Just script -> lift $ insertScript syncEnv txId script
+        Just script -> lift $ Just <$> insertScript syncEnv txId script
         Nothing -> pure Nothing
       insertColTxOutPart2 mDatumId mScriptId
       pure ()

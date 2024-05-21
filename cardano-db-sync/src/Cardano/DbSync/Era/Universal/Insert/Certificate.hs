@@ -31,8 +31,7 @@ import Cardano.DbSync.Cache (
   queryOrInsertStakeAddress,
   queryPoolKeyOrInsert,
  )
-import Cardano.DbSync.Era.Conway.Insert.GovAction (
-import Cardano.DbSync.Cache.Types (CacheStatus (..), CacheUpdateAction (..))
+import Cardano.DbSync.Cache.Types (CacheAction (..), CacheStatus (..))
 import Cardano.DbSync.Config.Types (isShelleyModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Universal.Insert.GovAction (
@@ -204,7 +203,7 @@ insertMirCert syncEnv network txId idx mcert = do
     insertMirReserves (cred, dcoin) =
       -- Check if the stake address is in the shelley whitelist
       when (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount network cred) $ do
-        addrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) CacheNew network cred
+        addrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) UpdateCache network cred
         void . lift . DB.insertReserve $
           DB.Reserve
             { DB.reserveAddrId = addrId
@@ -220,7 +219,7 @@ insertMirCert syncEnv network txId idx mcert = do
     insertMirTreasury (cred, dcoin) =
       -- Check if the stake address is in the shelley whitelist
       when (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount network cred) $ do
-        addrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) CacheNew network cred
+        addrId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) UpdateCache network cred
         void . lift . DB.insertTreasury $
           DB.Treasury
             { DB.treasuryAddrId = addrId
@@ -340,7 +339,7 @@ insertStakeDeregistration ::
 insertStakeDeregistration syncEnv network epochNo txId idx mRedeemerId cred = do
   -- Check if the stake address is in the  shelley whitelist
   when (shelleyCustomStakeWhitelistCheck syncEnv $ Ledger.RewardAccount network cred) $ do
-    scId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) EvictAndReturn network cred
+    scId <- lift $ queryOrInsertStakeAddress syncEnv (envCache syncEnv) EvictAndUpdateCache network cred
     void . lift . DB.insertStakeDeregistration $
       DB.StakeDeregistration
         { DB.stakeDeregistrationAddrId = scId
@@ -362,10 +361,7 @@ insertStakeRegistration ::
 insertStakeRegistration syncEnv epochNo mDeposits txId idx rewardAccount = do
   -- Check if the stake address is in the shelley whitelist
   when (shelleyCustomStakeWhitelistCheck syncEnv rewardAccount) $ do
-    -- We by-pass the cache here It's likely it won't hit.
-    -- We don't store to the cache yet, since there are many addrresses
-    -- which are registered and never used.
-    saId <- lift $ insertStakeAddress syncEnv rewardAccount Nothing
+    saId <- lift $ queryOrInsertRewardAccount syncEnv (envCache syncEnv) UpdateCache rewardAccount
     void . lift . DB.insertStakeRegistration $
       DB.StakeRegistration
         { DB.stakeRegistrationAddrId = saId
@@ -433,8 +429,8 @@ insertDelegation ::
 insertDelegation syncEnv cache network (EpochNo epoch) slotNo txId idx mRedeemerId cred poolkh =
   -- Check if the stake address is in the shelley whitelist
   when (shelleyCustomStakeWhitelistCheck syncEnv $ Ledger.RewardAccount network cred) $ do
-    addrId <- lift $ queryOrInsertStakeAddress syncEnv cache CacheNew network cred
-    poolHashId <- lift $ queryPoolKeyOrInsert "insertDelegation" syncEnv cache CacheNew True poolkh
+    addrId <- lift $ queryOrInsertStakeAddress syncEnv cache UpdateCache network cred
+    poolHashId <- lift $ queryPoolKeyOrInsert "insertDelegation" syncEnv cache UpdateCache True poolkh
     void . lift . DB.insertDelegation $
       DB.Delegation
         { DB.delegationAddrId = addrId

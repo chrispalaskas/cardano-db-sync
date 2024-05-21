@@ -26,18 +26,16 @@ plutusMultiAssetWhitelistCheck ::
 plutusMultiAssetWhitelistCheck syncEnv txMints txOuts =
   isPlutusScriptHashesInWhitelist syncEnv txOuts || isMAPoliciesInWhitelist syncEnv txMints txOuts
 
+-- | Check if any script hash or address is in the whitelist
 isPlutusScriptHashesInWhitelist :: SyncEnv -> [Generic.TxOut] -> Bool
 isPlutusScriptHashesInWhitelist syncEnv txOuts = do
-  -- first check the config option
   case ioPlutus iopts of
     PlutusEnable -> True
     PlutusDisable -> False
-    PlutusScripts plutusWhitelist -> plutuswhitelistCheck plutusWhitelist
+    PlutusScripts whitelist ->
+      any (\txOut -> isScriptHashWhitelisted whitelist txOut || isAddressWhitelisted whitelist txOut) txOuts
   where
     iopts = soptInsertOptions $ envOptions syncEnv
-    plutuswhitelistCheck :: NonEmpty ShortByteString -> Bool
-    plutuswhitelistCheck whitelist =
-      any (\txOut -> isScriptHashWhitelisted whitelist txOut || isAddressWhitelisted whitelist txOut) txOuts
     -- check if the script hash is in the whitelist
     isScriptHashWhitelisted :: NonEmpty ShortByteString -> Generic.TxOut -> Bool
     isScriptHashWhitelisted whitelist txOut =
@@ -51,7 +49,7 @@ isSimplePlutusScriptHashInWhitelist :: SyncEnv -> ByteString -> Bool
 isSimplePlutusScriptHashInWhitelist syncEnv scriptHash = do
   case ioPlutus iopts of
     PlutusEnable -> True
-    PlutusDisable -> True
+    PlutusDisable -> False
     PlutusScripts plutusWhitelist -> toShort scriptHash `elem` plutusWhitelist
   where
     iopts = soptInsertOptions $ envOptions syncEnv

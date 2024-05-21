@@ -15,7 +15,7 @@ import Cardano.BM.Trace (Trace, logError, logInfo)
 import qualified Cardano.Db as DB
 import Cardano.DbSync.Api
 import Cardano.DbSync.Api.Types (SyncEnv (envBackend))
-import Cardano.DbSync.Cache.Types (CacheStatus (..), useNoCache)
+import Cardano.DbSync.Cache.Types (useNoCache)
 import qualified Cardano.DbSync.Era.Shelley.Generic.Util as Generic
 import Cardano.DbSync.Era.Universal.Insert.Certificate (
   insertDelegation,
@@ -157,7 +157,7 @@ insertValidateGenesisDist syncEnv networkName cfg shelleyInitiation = do
                 "Initial genesis distribution populated. Hash "
                   <> renderByteArray (configGenesisHash cfg)
               when hasStakes $
-                insertStaking syncEnv useNoCache bid cfg
+                insertStaking syncEnv bid cfg
               supply <- lift DB.queryTotalSupply
               liftIO $ logInfo tracer ("Total genesis supply of Ada: " <> DB.renderAda supply)
 
@@ -297,7 +297,7 @@ insertStaking syncEnv blkId genesis = do
   forM_ stakes $ \(n, (keyStaking, keyPool)) -> do
     -- TODO: add initial deposits for genesis stake keys.
     insertStakeRegistration syncEnv (EpochNo 0) Nothing txId (2 * n) (Generic.annotateStakingCred network (KeyHashObj keyStaking))
-    insertDelegation syncEnv UninitiatedCache network (EpochNo 0) 0 txId (2 * n + 1) Nothing (KeyHashObj keyStaking) keyPool
+    insertDelegation syncEnv useNoCache network (EpochNo 0) 0 txId (2 * n + 1) Nothing (KeyHashObj keyStaking) keyPool
 
 -- -----------------------------------------------------------------------------
 

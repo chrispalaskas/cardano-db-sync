@@ -14,6 +14,7 @@ module Cardano.DbSync.Era.Universal.Insert.Other (
   insertRedeemerData,
   insertStakeAddressRefIfMissing,
   insertMultiAsset,
+  insertScriptWithWhitelist,
   insertScript,
   insertExtraKeyWitness,
 )
@@ -22,7 +23,7 @@ where
 import qualified Cardano.Db as DB
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..), SyncOptions (..))
 import Cardano.DbSync.Cache (insertDatumAndCache, queryDatum, queryMAWithCache, queryOrInsertRewardAccount, queryOrInsertStakeAddress)
-import Cardano.DbSync.Cache.Types (CacheStatus (..), CacheUpdateAction (..))
+import Cardano.DbSync.Cache.Types (CacheAction (..), CacheStatus (..))
 import Cardano.DbSync.Config.Types (isShelleyWhitelistModeActive)
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Shelley.Query (queryStakeRefPtr)
@@ -95,7 +96,7 @@ insertRedeemerData syncEnv txId txd = do
   case mRedeemerDataId of
     Just redeemerDataId -> pure redeemerDataId
     Nothing -> do
-      value <- safeDecodeToJson tracer "insertRedeemerData: Column 'value' in table 'datum' " $ Generic.txDataValue txd
+      value <- safeDecodeToJson syncEnv "insertRedeemerData: Column 'value' in table 'datum' " $ Generic.txDataValue txd
       lift
         . DB.insertRedeemerData
         $ DB.RedeemerData
@@ -120,7 +121,7 @@ insertDatum syncEnv cache txId txd = do
   case mDatumId of
     Just datumId -> pure datumId
     Nothing -> do
-      value <- safeDecodeToJson tracer "insertDatum: Column 'value' in table 'redeemer' " $ Generic.txDataValue txd
+      value <- safeDecodeToJson syncEnv "insertDatum: Column 'value' in table 'redeemer' " $ Generic.txDataValue txd
       lift $
         insertDatumAndCache cache (Generic.txDataHash txd) $
           DB.Datum
@@ -158,7 +159,7 @@ insertWithdrawals syncEnv cache txId redeemers txWdrl = do
 insertStakeAddressRefIfMissing ::
   (MonadBaseControl IO m, MonadIO m) =>
   SyncEnv ->
-  Cache ->
+  CacheStatus ->
   Ledger.Addr StandardCrypto ->
   ReaderT SqlBackend m (Maybe DB.StakeAddressId)
 insertStakeAddressRefIfMissing syncEnv cache addr =
@@ -168,17 +169,16 @@ insertStakeAddressRefIfMissing syncEnv cache addr =
       case sref of
         Ledger.StakeRefBase cred -> do
           -- Check if the stake address is in the shelley whitelist
-          if shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw cred
-            then do
-              Just <$> queryOrInsertStakeAddress syncEnv cache DoNotUpdateCache nw cred
-            else pure Nothing
+          whenFalseEmpty
+            (shelleyStakeAddrWhitelistCheck syncEnv $ Ledger.RewardAccount nw cred)
+            Nothing
+            (Just <$> queryOrInsertStakeAddress syncEnv cache DoNotUpdateCache nw cred)
         Ledger.StakeRefPtr ptr -> do
           queryStakeRefPtr ptr
         Ledger.StakeRefNull -> pure Nothing
 
 insertMultiAsset ::
   (MonadBaseControl IO m, MonadIO m) =>
-  Trace IO Text ->
   CacheStatus ->
   Maybe (NonEmpty ShortByteString) ->
   PolicyID StandardCrypto ->
@@ -205,36 +205,42 @@ insertMultiAsset cache mWhitelist policy aName = do
           , DB.multiAssetFingerprint = DB.unAssetFingerprint (DB.mkAssetFingerprint policyBs assetNameBs)
           }
 
-insertScript ::
+insertScriptWithWhitelist ::
   (MonadBaseControl IO m, MonadIO m) =>
   SyncEnv ->
   DB.TxId ->
   Generic.TxScript ->
   ReaderT SqlBackend m (Maybe DB.ScriptId)
-insertScript syncEnv txId script =
+insertScriptWithWhitelist syncEnv txId script = do
   if isSimplePlutusScriptHashInWhitelist syncEnv $ Generic.txScriptHash script
-    then do
-      mScriptId <- DB.queryScript $ Generic.txScriptHash script
-      case mScriptId of
-        Just scriptId -> pure $ Just scriptId
-        Nothing -> do
-          json <- scriptConvert script
-          mInScript <-
-            DB.insertScript $
-              DB.Script
-                { DB.scriptTxId = txId
-                , DB.scriptHash = Generic.txScriptHash script
-                , DB.scriptType = Generic.txScriptType script
-                , DB.scriptSerialisedSize = Generic.txScriptPlutusSize script
-                , DB.scriptJson = json
-                , DB.scriptBytes = Generic.txScriptCBOR script
-                }
-          pure $ Just mInScript
+    then insertScript syncEnv txId script <&> Just
     else pure Nothing
+
+insertScript ::
+  (MonadBaseControl IO m, MonadIO m) =>
+  SyncEnv ->
+  DB.TxId ->
+  Generic.TxScript ->
+  ReaderT SqlBackend m DB.ScriptId
+insertScript syncEnv txId script = do
+  mScriptId <- DB.queryScript $ Generic.txScriptHash script
+  case mScriptId of
+    Just scriptId -> pure scriptId
+    Nothing -> do
+      json <- scriptConvert script
+      DB.insertScript $
+        DB.Script
+          { DB.scriptTxId = txId
+          , DB.scriptHash = Generic.txScriptHash script
+          , DB.scriptType = Generic.txScriptType script
+          , DB.scriptSerialisedSize = Generic.txScriptPlutusSize script
+          , DB.scriptJson = json
+          , DB.scriptBytes = Generic.txScriptCBOR script
+          }
   where
     scriptConvert :: (MonadIO m) => Generic.TxScript -> m (Maybe Text)
     scriptConvert s =
-      maybe (pure Nothing) (safeDecodeToJson tracer "insertScript: Column 'json' in table 'script' ") (Generic.txScriptJson s)
+      maybe (pure Nothing) (safeDecodeToJson syncEnv "insertScript: Column 'json' in table 'script' ") (Generic.txScriptJson s)
 
 insertExtraKeyWitness ::
   (MonadBaseControl IO m, MonadIO m) =>

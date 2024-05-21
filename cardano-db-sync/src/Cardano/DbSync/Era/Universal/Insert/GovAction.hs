@@ -6,6 +6,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module Cardano.DbSync.Era.Universal.Insert.GovAction (
@@ -28,12 +29,14 @@ module Cardano.DbSync.Era.Universal.Insert.GovAction (
 )
 where
 
+import Cardano.BM.Trace (logWarning)
 import qualified Cardano.Crypto as Crypto
 import Cardano.Db (DbWord64 (..))
 import qualified Cardano.Db as DB
+import Cardano.DbSync.Api (getTrace)
 import Cardano.DbSync.Api.Types (InsertOptions (..), SyncEnv (..), SyncOptions (..))
 import Cardano.DbSync.Cache (queryOrInsertRewardAccount, queryPoolKeyOrInsert)
-import Cardano.DbSync.Cache.Types (CacheStatus (..), CacheUpdateAction (..))
+import Cardano.DbSync.Cache.Types (CacheAction (..))
 import Cardano.DbSync.Config.Types (ShelleyInsertConfig (..))
 import qualified Cardano.DbSync.Era.Shelley.Generic as Generic
 import Cardano.DbSync.Era.Shelley.Generic.ParamProposal
@@ -51,7 +54,7 @@ import Cardano.Ledger.CertState (DRep (..))
 import Cardano.Ledger.Coin (Coin)
 import qualified Cardano.Ledger.Coin as Ledger
 import Cardano.Ledger.Compactible (Compactible (..))
-import Cardano.Ledger.Conway.Core (DRepVotingThresholds (..), PoolVotingThresholds (..))
+import Cardano.Ledger.Conway.Core (DRepVotingThresholds (..), Era (..), PoolVotingThresholds (..))
 import Cardano.Ledger.Conway.Governance
 import qualified Cardano.Ledger.Credential as Ledger
 import Cardano.Ledger.DRep (DRepState (..))
@@ -84,7 +87,7 @@ insertGovActionProposal syncEnv blkId txId govExpiresAt mmCommittee (index, pp) 
   -- check if shelley stake address is in the whitelist
   when (shelleyStakeAddrWhitelistCheck syncEnv $ pProcReturnAddr pp) $ do
     addrId <- lift $ queryOrInsertRewardAccount syncEnv cache UpdateCache $ pProcReturnAddr pp
-    votingAnchorId <- lift $ insertVotingAnchor txId DB.GovActionAnchor $ pProcAnchor pp
+    votingAnchorId <- lift $ insertVotingAnchor blkId DB.GovActionAnchor $ pProcAnchor pp
     mParamProposalId <- lift $
       case pProcGovAction pp of
         ParameterChange _ pparams _ ->
@@ -114,8 +117,8 @@ insertGovActionProposal syncEnv blkId txId govExpiresAt mmCommittee (index, pp) 
             }
     case pProcGovAction pp of
       TreasuryWithdrawals mp _ -> lift $ mapM_ (insertTreasuryWithdrawal govActionProposalId) (Map.toList mp)
-      UpdateCommittee _ removed added q -> lift $ insertNewCommittee govActionProposalId removed added q
-      NewConstitution _ constitution -> lift $ insertConstitution txId govActionProposalId constitution
+      UpdateCommittee _ removed added q -> lift $ insertNewCommittee (Just govActionProposalId) removed added q
+      NewConstitution _ constitution -> void $ lift $ insertConstitution blkId (Just govActionProposalId) constitution
       _ -> pure ()
   where
     cache = envCache syncEnv
@@ -133,7 +136,7 @@ insertGovActionProposal syncEnv blkId txId govExpiresAt mmCommittee (index, pp) 
       ReaderT SqlBackend m DB.TreasuryWithdrawalId
     insertTreasuryWithdrawal gaId (rwdAcc, coin) = do
       addrId <-
-        queryOrInsertRewardAccount cache UpdateCache rwdAcc
+        queryOrInsertRewardAccount syncEnv cache UpdateCache rwdAcc
       DB.insertTreasuryWithdrawal $
         DB.TreasuryWithdrawal
           { DB.treasuryWithdrawalGovActionProposalId = gaId
@@ -149,7 +152,6 @@ insertGovActionProposal syncEnv blkId txId govExpiresAt mmCommittee (index, pp) 
       ReaderT SqlBackend m ()
     insertNewCommittee gapId removed added q = do
       void $ insertCommittee' gapId (updatedCommittee removed added q <$> mmCommittee) q
-
 
 insertCommittee :: (MonadIO m, MonadBaseControl IO m) => Maybe DB.GovActionProposalId -> Committee StandardConway -> ReaderT SqlBackend m DB.CommitteeId
 insertCommittee mgapId committee = do
@@ -290,29 +292,31 @@ insertConstitution blockId mgapId constitution = do
 insertVotingProcedures ::
   (MonadIO m, MonadBaseControl IO m) =>
   SyncEnv ->
+  DB.BlockId ->
   DB.TxId ->
   [ProposalProcedure StandardConway] ->
   (Voter StandardCrypto, [(GovActionId StandardCrypto, VotingProcedure StandardConway)]) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertVotingProcedures syncEnv txId proposalPs (voter, actions) =
+insertVotingProcedures syncEnv blkId txId proposalPs (voter, actions) =
   -- TODO: cmdv will actions & proposalPs always be the same length?
-  mapM_ (insertVotingProcedure syncEnv txId voter) (zip3 [0 ..] actions proposalPs)
+  mapM_ (insertVotingProcedure syncEnv blkId txId voter) (zip3 [0 ..] actions proposalPs)
 
 insertVotingProcedure ::
   (MonadIO m, MonadBaseControl IO m) =>
   SyncEnv ->
+  DB.BlockId ->
   DB.TxId ->
   Voter StandardCrypto ->
   (Word16, (GovActionId StandardCrypto, VotingProcedure StandardConway), ProposalProcedure StandardConway) ->
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
-insertVotingProcedure syncEnv txId voter (index, (gaId, vp), proposalP) = do
+insertVotingProcedure syncEnv blkId txId voter (index, (gaId, vp), proposalP) = do
   -- check if shelley stake address is in the whitelist
   when (shelleyStakeAddrWhitelistCheck syncEnv $ pProcReturnAddr proposalP) $ do
     maybeGovActionId <- resolveGovActionProposal syncEnv gaId
     case maybeGovActionId of
       Nothing -> pure ()
       Just govActionId -> do
-        votingAnchorId <- whenMaybe (strictMaybeToMaybe $ vProcAnchor vp) $ lift . insertVotingAnchor txId DB.OtherAnchor
+        votingAnchorId <- whenMaybe (strictMaybeToMaybe $ vProcAnchor vp) $ lift . insertVotingAnchor blkId DB.OtherAnchor
         (mCommitteeVoterId, mDRepVoter, mStakePoolVoter) <- case voter of
           CommitteeVoter cred -> do
             khId <- lift $ insertCommitteeHash cred
@@ -459,19 +463,19 @@ insertUpdateEnacted ::
   ExceptT SyncNodeError (ReaderT SqlBackend m) ()
 insertUpdateEnacted syncEnv blkId epochNo enactedState = do
   whenJust (strictMaybeToMaybe (grPParamUpdate govIds)) $ \prevId -> do
-    maybeGaId <- resolveGovActionProposal syncEnv $ getPrevId prevId
-    case maybeGaId of
-      Nothing -> pure ()
-      Just gaId -> lift $ DB.updateGovActionEnacted gaId (unEpochNo epochNo)
-
-  whenJust (strictMaybeToMaybe (grHardFork govIds)) $ \prevId -> do
-    maybeGaId <- resolveGovActionProposal $ unGovPurposeId prevId
+    maybeGaId <- resolveGovActionProposal syncEnv $ unGovPurposeId prevId
     case maybeGaId of
       Nothing -> pure ()
       Just gaId -> void $ lift $ DB.updateGovActionEnacted gaId (unEpochNo epochNo)
-  (mcommitteeId, mnoConfidenceGaId) <- handleCommittee syncEnv blkId
 
-  constitutionId <- handleConstitution syncEnv blkId
+  whenJust (strictMaybeToMaybe (grHardFork govIds)) $ \prevId -> do
+    maybeGaId <- resolveGovActionProposal syncEnv $ unGovPurposeId prevId
+    case maybeGaId of
+      Nothing -> pure ()
+      Just gaId -> void $ lift $ DB.updateGovActionEnacted gaId (unEpochNo epochNo)
+  (mcommitteeId, mnoConfidenceGaId) <- handleCommittee syncEnv govIds epochNo enactedState
+
+  constitutionId <- handleConstitution syncEnv blkId govIds epochNo enactedState
 
   void $
     lift $
@@ -485,7 +489,14 @@ insertUpdateEnacted syncEnv blkId epochNo enactedState = do
   where
     govIds = govStatePrevGovActionIds enactedState
 
-handleCommittee syncEnv govIds blkId = do
+handleCommittee ::
+  (EraCrypto era ~ StandardCrypto, MonadIO m, MonadBaseControl IO m) =>
+  SyncEnv ->
+  GovRelation StrictMaybe era ->
+  EpochNo ->
+  ConwayGovState StandardConway ->
+  ExceptT SyncNodeError (ReaderT SqlBackend m) (Maybe DB.CommitteeId, Maybe DB.GovActionProposalId)
+handleCommittee syncEnv govIds epochNo enactedState = do
   mCommitteeGaId <- case strictMaybeToMaybe (grCommittee govIds) of
     Nothing -> pure Nothing
     Just prevId -> do
@@ -517,7 +528,7 @@ handleCommittee syncEnv govIds blkId = do
           -- This should never happen. Having a committee and an enacted action, means
           -- the committee came from a proposal which should be returned from the query.
           liftIO $
-            logWarning trce $
+            logWarning (getTrace syncEnv) $
               mconcat
                 [ "The impossible happened! Couldn't find the committee "
                 , textShow committee
@@ -528,7 +539,15 @@ handleCommittee syncEnv govIds blkId = do
         (committeeId : _rest) ->
           pure (Just committeeId, Nothing)
 
-handleConstitution syncEnv govIds = do
+handleConstitution ::
+  (EraCrypto era ~ StandardCrypto, MonadIO m, MonadBaseControl IO m) =>
+  SyncEnv ->
+  DB.BlockId ->
+  GovRelation StrictMaybe era ->
+  EpochNo ->
+  ConwayGovState StandardConway ->
+  ExceptT SyncNodeError (ReaderT SqlBackend m) DB.ConstitutionId
+handleConstitution syncEnv blkId govIds epochNo enactedState = do
   mConstitutionGaId <- case strictMaybeToMaybe (grConstitution govIds) of
     Nothing -> pure Nothing
     Just prevId -> do
@@ -547,7 +566,7 @@ handleConstitution syncEnv govIds = do
     constitutionId : rest -> do
       unless (null rest) $
         liftIO $
-          logWarning trce $
+          logWarning (getTrace syncEnv) $
             mconcat
               [ "Found multiple constitutions for proposal "
               , textShow mConstitutionGaId
@@ -555,16 +574,3 @@ handleConstitution syncEnv govIds = do
               , textShow constitutionIds
               ]
       pure constitutionId
-=======
-  whenJust (strictMaybeToMaybe (grCommittee enactedState)) $ \prevId -> do
-    maybeGaId <- resolveGovActionProposal syncEnv $ unGovPurposeId prevId
-    case maybeGaId of
-      Nothing -> pure ()
-      Just gaId -> lift $ DB.updateGovActionEnacted gaId (unEpochNo epochNo)
-
-  whenJust (strictMaybeToMaybe (grConstitution enactedState)) $ \prevId -> do
-    maybeGaId <- resolveGovActionProposal syncEnv $ unGovPurposeId prevId
-    case maybeGaId of
-      Nothing -> pure ()
-      Just gaId -> lift $ DB.updateGovActionEnacted gaId (unEpochNo epochNo)
->>>>>>> 328815aa (fix merge conflict errors)
