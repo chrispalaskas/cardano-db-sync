@@ -145,7 +145,7 @@
                 else lib.mkDefault "ghc96";
             flake.variants =
               let
-                compilers = lib.optionals (system == "x86_64-linux") ["ghc96"];
+                compilers = lib.optionals (system == "x86_64-linux") ["ghc96" "ghc98"];
               in
                 lib.genAttrs compilers (c: { compiler-nix-name = c; });
 
@@ -153,29 +153,27 @@
               "https://chap.intersectmbo.org/" = inputs.CHaP;
             };
 
-            shell.tools = {
-              cabal = "3.10.3.0";
-              ghcid = "0.8.8";
-              haskell-language-server = {
-                src =
-                  if config.compiler-nix-name == "ghc8107" then
-                    nixpkgs.haskell-nix.sources."hls-1.10"
-                  else
-                    nixpkgs.haskell-nix.sources."hls-2.7";
+            shell = lib.optionalAttrs (builtins.elem config.compiler-nix-name ["ghc810" "ghc96"]) {
+              tools = {
+                cabal = "3.10.3.0";
+                ghcid = "0.8.8";
+                haskell-language-server = {
+                  src = nixpkgs.haskell-nix.sources."hls-1.10";
+                };
               };
+              # Now we use pkgsBuildBuild, to make sure that even in the cross
+              # compilation setting, we don't run into issues where we pick tools
+              # for the target.
+              buildInputs = with nixpkgs.pkgsBuildBuild; [
+                gitAndTools.git
+                fourmolu
+                hlint
+              ] ++ lib.optionals (config.compiler-nix-name == "ghc810") [
+                # Weeder requires the GHC version to match HIE files
+                weeder
+              ];
+              withHoogle = true;
             };
-            # Now we use pkgsBuildBuild, to make sure that even in the cross
-            # compilation setting, we don't run into issues where we pick tools
-            # for the target.
-            shell.buildInputs = with nixpkgs.pkgsBuildBuild; [
-              gitAndTools.git
-              fourmolu
-              hlint
-            ] ++ lib.optionals (config.compiler-nix-name == "ghc8107") [
-              # Weeder requires the GHC version to match HIE files
-              weeder
-            ];
-            shell.withHoogle = true;
 
             modules = [
               ({ lib, pkgs, ... }: {
